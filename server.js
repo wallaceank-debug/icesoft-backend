@@ -103,6 +103,38 @@ app.get('/api/ranking', async (req, res) => {
 });
 
 // ==========================================
+// ROTA 5: Sistema de Login e Segurança
+// ==========================================
+app.post('/api/login', async (req, res) => {
+    const { username, senha } = req.body;
+
+    try {
+        // Busca no banco se existe alguém com esse nome e senha
+        const querySql = 'SELECT * FROM usuarios WHERE username = $1 AND senha = $2';
+        const resultado = await pool.query(querySql, [username, senha]);
+
+        if (resultado.rows.length > 0) {
+            const usuarioLogado = resultado.rows[0];
+            console.log(`🔐 Acesso Liberado para: ${usuarioLogado.username}`);
+            
+            // Cria um "crachá" simples para devolver ao navegador
+            res.json({ 
+                sucesso: true, 
+                mensagem: "Login aprovado", 
+                token: "cracha-icesoft-aprovado",
+                cargo: usuarioLogado.cargo
+            });
+        } else {
+            console.log(`🚫 Tentativa de invasão bloqueada! Usuário: ${username}`);
+            res.status(401).json({ sucesso: false, erro: "Usuário ou senha incorretos!" });
+        }
+    } catch (erro) {
+        console.error("Erro no sistema de login:", erro);
+        res.status(500).json({ erro: "Erro interno do servidor" });
+    }
+});
+
+// ==========================================
 // 3. LIGANDO A IGNIÇÃO (Preparado para Nuvem)
 // ==========================================
 // A nuvem injeta a própria porta no 'process.env.PORT'. Se não tiver, usa a 3000.
