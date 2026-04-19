@@ -135,6 +135,43 @@ app.post('/api/login', async (req, res) => {
 });
 
 // ==========================================
+// ROTA: Adicionar Novo Produto (CREATE)
+// ==========================================
+app.post('/api/produtos', async (req, res) => {
+    const { nome, descricao, preco, emoji } = req.body;
+
+    try {
+        const querySql = 'INSERT INTO produtos (nome, descricao, preco, emoji) VALUES ($1, $2, $3, $4) RETURNING *';
+        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji]);
+        
+        console.log(`📦 Novo produto cadastrado: ${nome}`);
+        res.json({ sucesso: true, produto: resultado.rows[0] });
+    } catch (erro) {
+        console.error("Erro ao cadastrar produto:", erro);
+        res.status(500).json({ sucesso: false, erro: "Erro ao salvar no banco de dados" });
+    }
+});
+
+// ==========================================
+// ROTA: Editar Produto Existente (UPDATE)
+// ==========================================
+app.put('/api/produtos/:id', async (req, res) => {
+    const { id } = req.params; // Pega o ID do produto na URL
+    const { nome, descricao, preco, emoji } = req.body;
+
+    try {
+        const querySql = 'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4 WHERE id = $5 RETURNING *';
+        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, id]);
+        
+        console.log(`✏️ Produto atualizado: ${nome}`);
+        res.json({ sucesso: true, produto: resultado.rows[0] });
+    } catch (erro) {
+        console.error("Erro ao editar produto:", erro);
+        res.status(500).json({ sucesso: false, erro: "Erro ao atualizar no banco de dados" });
+    }
+});
+
+// ==========================================
 // 3. LIGANDO A IGNIÇÃO (Preparado para Nuvem)
 // ==========================================
 // A nuvem injeta a própria porta no 'process.env.PORT'. Se não tiver, usa a 3000.
