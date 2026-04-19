@@ -138,11 +138,14 @@ app.post('/api/login', async (req, res) => {
 // ROTA: Adicionar Novo Produto (CREATE)
 // ==========================================
 app.post('/api/produtos', async (req, res) => {
-    const { nome, descricao, preco, emoji } = req.body;
+    // Agora ele também recebe os "opcionais"
+    const { nome, descricao, preco, emoji, opcionais } = req.body;
+    // Se não vier nenhum opcional, salva uma lista vazia '[]'
+    const opcionaisFormatados = opcionais ? JSON.stringify(opcionais) : '[]';
 
     try {
-        const querySql = 'INSERT INTO produtos (nome, descricao, preco, emoji) VALUES ($1, $2, $3, $4) RETURNING *';
-        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji]);
+        const querySql = 'INSERT INTO produtos (nome, descricao, preco, emoji, opcionais) VALUES ($1, $2, $3, $4, $5) RETURNING *';
+        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, opcionaisFormatados]);
         
         console.log(`📦 Novo produto cadastrado: ${nome}`);
         res.json({ sucesso: true, produto: resultado.rows[0] });
@@ -156,12 +159,13 @@ app.post('/api/produtos', async (req, res) => {
 // ROTA: Editar Produto Existente (UPDATE)
 // ==========================================
 app.put('/api/produtos/:id', async (req, res) => {
-    const { id } = req.params; // Pega o ID do produto na URL
-    const { nome, descricao, preco, emoji } = req.body;
+    const { id } = req.params; 
+    const { nome, descricao, preco, emoji, opcionais } = req.body;
+    const opcionaisFormatados = opcionais ? JSON.stringify(opcionais) : '[]';
 
     try {
-        const querySql = 'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4 WHERE id = $5 RETURNING *';
-        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, id]);
+        const querySql = 'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, opcionais = $5 WHERE id = $6 RETURNING *';
+        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, opcionaisFormatados, id]);
         
         console.log(`✏️ Produto atualizado: ${nome}`);
         res.json({ sucesso: true, produto: resultado.rows[0] });
