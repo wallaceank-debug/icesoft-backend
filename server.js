@@ -135,19 +135,16 @@ app.post('/api/login', async (req, res) => {
 });
 
 // ==========================================
-// ROTA: Adicionar Novo Produto (CREATE)
+// ROTA: Adicionar Novo Produto (CREATE) - ATUALIZADO
 // ==========================================
 app.post('/api/produtos', async (req, res) => {
-    // Agora ele também recebe os "opcionais"
-    const { nome, descricao, preco, emoji, opcionais } = req.body;
-    // Se não vier nenhum opcional, salva uma lista vazia '[]'
-    const opcionaisFormatados = opcionais ? JSON.stringify(opcionais) : '[]';
+    const { nome, descricao, preco, emoji, grupos_ids } = req.body;
+    const grupos = grupos_ids || []; // Agora recebe uma lista de IDs (Ex: [1, 3])
 
     try {
-        const querySql = 'INSERT INTO produtos (nome, descricao, preco, emoji, opcionais) VALUES ($1, $2, $3, $4, $5) RETURNING *';
-        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, opcionaisFormatados]);
+        const querySql = 'INSERT INTO produtos (nome, descricao, preco, emoji, grupos_ids) VALUES ($1, $2, $3, $4, $5) RETURNING *';
+        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, grupos]);
         
-        console.log(`📦 Novo produto cadastrado: ${nome}`);
         res.json({ sucesso: true, produto: resultado.rows[0] });
     } catch (erro) {
         console.error("Erro ao cadastrar produto:", erro);
@@ -156,18 +153,17 @@ app.post('/api/produtos', async (req, res) => {
 });
 
 // ==========================================
-// ROTA: Editar Produto Existente (UPDATE)
+// ROTA: Editar Produto Existente (UPDATE) - ATUALIZADO
 // ==========================================
 app.put('/api/produtos/:id', async (req, res) => {
     const { id } = req.params; 
-    const { nome, descricao, preco, emoji, opcionais } = req.body;
-    const opcionaisFormatados = opcionais ? JSON.stringify(opcionais) : '[]';
+    const { nome, descricao, preco, emoji, grupos_ids } = req.body;
+    const grupos = grupos_ids || [];
 
     try {
-        const querySql = 'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, opcionais = $5 WHERE id = $6 RETURNING *';
-        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, opcionaisFormatados, id]);
+        const querySql = 'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, grupos_ids = $5 WHERE id = $6 RETURNING *';
+        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, grupos, id]);
         
-        console.log(`✏️ Produto atualizado: ${nome}`);
         res.json({ sucesso: true, produto: resultado.rows[0] });
     } catch (erro) {
         console.error("Erro ao editar produto:", erro);
@@ -194,6 +190,64 @@ app.delete('/api/produtos/:id', async (req, res) => {
     } catch (erro) {
         console.error("Erro ao excluir produto:", erro);
         res.status(500).json({ sucesso: false, erro: "Erro ao excluir do banco de dados" });
+    }
+});
+
+// ==========================================
+// ROTAS: GRUPOS DE ADICIONAIS (Modificadores)
+// ==========================================
+
+// 1. Listar todos os Grupos
+app.get('/api/grupos', async (req, res) => {
+    try {
+        const resultado = await pool.query('SELECT * FROM grupos_adicionais ORDER BY id DESC');
+        res.json(resultado.rows);
+    } catch (erro) {
+        console.error("Erro ao buscar grupos:", erro);
+        res.status(500).json({ erro: "Erro ao buscar grupos" });
+    }
+});
+
+// 2. Criar novo Grupo
+app.post('/api/grupos', async (req, res) => {
+    const { nome, limite, itens } = req.body;
+    const itensFormatados = itens ? JSON.stringify(itens) : '[]';
+    
+    try {
+        const sql = 'INSERT INTO grupos_adicionais (nome, limite, itens) VALUES ($1, $2, $3) RETURNING *';
+        const resultado = await pool.query(sql, [nome, limite, itensFormatados]);
+        res.json({ sucesso: true, grupo: resultado.rows[0] });
+    } catch (erro) {
+        console.error("Erro ao criar grupo:", erro);
+        res.status(500).json({ erro: "Erro ao criar grupo" });
+    }
+});
+
+// 3. Atualizar Grupo
+app.put('/api/grupos/:id', async (req, res) => {
+    const { id } = req.params;
+    const { nome, limite, itens } = req.body;
+    const itensFormatados = itens ? JSON.stringify(itens) : '[]';
+    
+    try {
+        const sql = 'UPDATE grupos_adicionais SET nome = $1, limite = $2, itens = $3 WHERE id = $4 RETURNING *';
+        const resultado = await pool.query(sql, [nome, limite, itensFormatados, id]);
+        res.json({ sucesso: true, grupo: resultado.rows[0] });
+    } catch (erro) {
+        console.error("Erro ao atualizar grupo:", erro);
+        res.status(500).json({ erro: "Erro ao atualizar grupo" });
+    }
+});
+
+// 4. Excluir Grupo
+app.delete('/api/grupos/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await pool.query('DELETE FROM grupos_adicionais WHERE id = $1', [id]);
+        res.json({ sucesso: true, mensagem: "Grupo excluído!" });
+    } catch (erro) {
+        console.error("Erro ao excluir grupo:", erro);
+        res.status(500).json({ erro: "Erro ao excluir grupo" });
     }
 });
 
