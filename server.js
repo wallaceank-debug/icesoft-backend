@@ -172,6 +172,28 @@ app.put('/api/produtos/:id', async (req, res) => {
 });
 
 // ==========================================
+// ROTA: Excluir Produto Existente (DELETE)
+// ==========================================
+app.delete('/api/produtos/:id', async (req, res) => {
+    const { id } = req.params; // Pega o ID do produto que veio na URL
+
+    try {
+        const querySql = 'DELETE FROM produtos WHERE id = $1 RETURNING *';
+        const resultado = await pool.query(querySql, [id]);
+        
+        if (resultado.rowCount > 0) {
+            console.log(`🗑️ Produto excluído com sucesso ID: ${id}`);
+            res.json({ sucesso: true, mensagem: "Produto excluído!" });
+        } else {
+            res.status(404).json({ sucesso: false, erro: "Produto não encontrado" });
+        }
+    } catch (erro) {
+        console.error("Erro ao excluir produto:", erro);
+        res.status(500).json({ sucesso: false, erro: "Erro ao excluir do banco de dados" });
+    }
+});
+
+// ==========================================
 // 3. LIGANDO A IGNIÇÃO (Preparado para Nuvem)
 // ==========================================
 // A nuvem injeta a própria porta no 'process.env.PORT'. Se não tiver, usa a 3000.
