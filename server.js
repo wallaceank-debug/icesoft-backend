@@ -252,6 +252,36 @@ app.delete('/api/grupos/:id', async (req, res) => {
 });
 
 // ==========================================
+// ROTAS DE STATUS (LIGA/DESLIGA - CHAVINHAS)
+// ==========================================
+
+// 1. Ligar/Desligar Produto
+app.put('/api/produtos/:id/status', async (req, res) => {
+    const { id } = req.params;
+    const { ativo } = req.body; // Recebe true (ligado) ou false (desligado)
+    try {
+        await pool.query('UPDATE produtos SET ativo = $1 WHERE id = $2', [ativo, id]);
+        res.json({ sucesso: true, mensagem: "Status do produto atualizado!" });
+    } catch (erro) {
+        console.error("Erro ao mudar status do produto:", erro);
+        res.status(500).json({ erro: "Erro ao atualizar status" });
+    }
+});
+
+// 2. Ligar/Desligar Grupo de Adicionais
+app.put('/api/grupos/:id/status', async (req, res) => {
+    const { id } = req.params;
+    const { ativo } = req.body;
+    try {
+        await pool.query('UPDATE grupos_adicionais SET ativo = $1 WHERE id = $2', [ativo, id]);
+        res.json({ sucesso: true, mensagem: "Status do grupo atualizado!" });
+    } catch (erro) {
+        console.error("Erro ao mudar status do grupo:", erro);
+        res.status(500).json({ erro: "Erro ao atualizar status" });
+    }
+});
+
+// ==========================================
 // 3. LIGANDO A IGNIÇÃO (Preparado para Nuvem)
 // ==========================================
 // A nuvem injeta a própria porta no 'process.env.PORT'. Se não tiver, usa a 3000.
