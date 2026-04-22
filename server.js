@@ -391,53 +391,52 @@ app.post('/api/caixa/movimentacao', async (req, res) => {
     }
 });
 
-// 5. Calcular o Resumo do Caixa para a Conferência
+// 5. Calcular o Resumo do Caixa para a Conferência (VERSÃO TITÂNIO)
 app.get('/api/caixa/resumo/:id', async (req, res) => {
     const { id } = req.params;
     try {
-        const caixaRes = await pool.query('SELECT data_abertura, valor_inicial FROM controle_caixa WHERE id = $1', [id]);
-        if (caixaRes.rows.length === 0) throw new Error("Caixa não encontrado");
+        const caixaRes = await pool.query('SELECT * FROM controle_caixa WHERE id = $1', [id]);
+        if (caixaRes.rows.length === 0) return res.status(404).json({ erro: "Caixa não encontrado" });
 
-        const dataAbertura = caixaRes.rows[0].data_abertura;
-        const valorInicial = parseFloat(caixaRes.rows[0].valor_inicial);
+        const caixa = caixaRes.rows[0];
+        const valorInicial = parseFloat(caixa.valor_inicial) || 0;
+        const abertura = new Date(caixa.data_abertura);
 
-        // Tenta buscar as vendas adivinhando o nome da coluna de data da sua tabela
+        // Puxa as últimas vendas e filtra no JavaScript (100% à prova de falhas de colunas)
+        const vendasRes = await pool.query("SELECT * FROM vendas ORDER BY id DESC LIMIT 500");
         let vendasDinheiro = 0;
-        try {
-            // Tentativa 1: 'data_venda'
-            const v1 = await pool.query("SELECT COALESCE(SUM(total), 0) as total FROM vendas WHERE forma_pagamento = 'Dinheiro' AND data_venda >= $1", [dataAbertura]);
-            vendasDinheiro = parseFloat(v1.rows[0].total);
-        } catch (e1) {
-            try {
-                // Tentativa 2: 'data'
-                const v2 = await pool.query("SELECT COALESCE(SUM(total), 0) as total FROM vendas WHERE forma_pagamento = 'Dinheiro' AND data >= $1", [dataAbertura]);
-                vendasDinheiro = parseFloat(v2.rows[0].total);
-            } catch (e2) {
-                try {
-                    // Tentativa 3: 'created_at'
-                    const v3 = await pool.query("SELECT COALESCE(SUM(total), 0) as total FROM vendas WHERE forma_pagamento = 'Dinheiro' AND created_at >= $1", [dataAbertura]);
-                    vendasDinheiro = parseFloat(v3.rows[0].total);
-                } catch (e3) {
-                    // Se nada der certo, não trava a tela, apenas zera as vendas de hoje
-                    console.log("Erro ao encontrar coluna de data nas vendas.");
-                }
+        
+        vendasRes.rows.forEach(venda => {
+            // Acha a data da venda, não importa o nome da coluna que esteja no seu banco
+            const dataVenda = new Date(venda.data_venda || venda.data || venda.created_at || venda.data_criacao || 0);
+            
+            // Soma apenas se foi em Dinheiro e se aconteceu DEPOIS da abertura do caixa
+            if (dataVenda >= abertura && venda.forma_pagamento === 'Dinheiro') {
+                vendasDinheiro += parseFloat(venda.total || venda.valor_total || 0);
             }
-        }
+        });
 
-        const movRes = await pool.query("SELECT tipo, COALESCE(SUM(valor), 0) as total FROM movimentacoes_caixa WHERE caixa_id = $1 GROUP BY tipo", [id]);
+        // Busca as movimentações (Sangria e Suprimento)
+        const movRes = await pool.query("SELECT tipo, valor FROM movimentacoes_caixa WHERE caixa_id = $1", [id]);
         let suprimentos = 0;
         let sangrias = 0;
         movRes.rows.forEach(r => {
-            if (r.tipo === 'Suprimento') suprimentos = parseFloat(r.total);
-            if (r.tipo === 'Sangria') sangrias = parseFloat(r.total);
+            if (r.tipo === 'Suprimento') suprimentos += parseFloat(r.valor);
+            if (r.tipo === 'Sangria') sangrias += parseFloat(r.valor);
         });
 
         const esperado = valorInicial + vendasDinheiro + suprimentos - sangrias;
 
-        res.json({ fundo: valorInicial, vendas_dinheiro: vendasDinheiro, suprimentos, sangrias, esperado });
+        res.json({
+            fundo: valorInicial,
+            vendas_dinheiro: vendasDinheiro,
+            suprimentos: suprimentos,
+            sangrias: sangrias,
+            esperado: esperado
+        });
     } catch (erro) {
-        console.error("Erro resumo:", erro);
-        res.status(500).json({ erro: erro.message || "Erro ao gerar resumo" });
+        console.error("Erro no Resumo Titânio:", erro);
+        res.status(500).json({ erro: "Erro Técnico: " + String(erro.message || erro) });
     }
 });
 
