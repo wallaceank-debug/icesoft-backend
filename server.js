@@ -362,36 +362,45 @@ app.post('/api/caixa/movimentacao', async (req, res) => {
     }
 });
 
+// 5. Calcular o Resumo do Caixa para a Conferência (VERSÃO BANCO DE DADOS NATIVO)
 app.get('/api/caixa/resumo/:id', async (req, res) => {
     const { id } = req.params;
     try {
+        // 1. Pega os dados do caixa
         const caixaRes = await pool.query('SELECT * FROM controle_caixa WHERE id = $1', [id]);
         if (caixaRes.rows.length === 0) return res.status(404).json({ erro: "Caixa não encontrado" });
 
         const caixa = caixaRes.rows[0];
         const valorInicial = parseFloat(caixa.valor_inicial) || 0;
-        const abertura = new Date(caixa.data_abertura);
+        const dataAbertura = caixa.data_abertura; // Deixa a data crua do banco!
 
-        const vendasRes = await pool.query("SELECT * FROM vendas ORDER BY id DESC LIMIT 500");
-        let vendasDinheiro = 0;
-        
-        vendasRes.rows.forEach(venda => {
-            // AQUI ESTAVA O BUG: Faltava o "data_hora" que é o nome real da sua coluna!
-            const dataVenda = new Date(venda.data_hora || venda.data_venda || venda.data || venda.created_at || venda.data_criacao || 0);
-            
-            if (dataVenda >= abertura && venda.forma_pagamento === 'Dinheiro') {
-                vendasDinheiro += parseFloat(venda.total || venda.valor_total || 0);
-            }
-        });
+        // 2. Manda o Banco de Dados somar as Vendas (Imune a fusos horários!)
+        // Ele vai ignorar letras maiúsculas/minúsculas garantindo que 'Dinheiro' seja encontrado
+        const sqlVendas = `
+            SELECT COALESCE(SUM(valor_total), 0) as total_vendas
+            FROM vendas
+            WHERE LOWER(TRIM(forma_pagamento)) = 'dinheiro'
+            AND data_hora >= $1
+        `;
+        const vendasRes = await pool.query(sqlVendas, [dataAbertura]);
+        const vendasDinheiro = parseFloat(vendasRes.rows[0].total_vendas) || 0;
 
-        const movRes = await pool.query("SELECT tipo, valor FROM movimentacoes_caixa WHERE caixa_id = $1", [id]);
+        // 3. Manda o Banco de Dados somar as Movimentações
+        const sqlMov = `
+            SELECT tipo, COALESCE(SUM(valor), 0) as total
+            FROM movimentacoes_caixa
+            WHERE caixa_id = $1
+            GROUP BY tipo
+        `;
+        const movRes = await pool.query(sqlMov, [id]);
         let suprimentos = 0;
         let sangrias = 0;
         movRes.rows.forEach(r => {
-            if (r.tipo === 'Suprimento') suprimentos += parseFloat(r.valor);
-            if (r.tipo === 'Sangria') sangrias += parseFloat(r.valor);
+            if (r.tipo === 'Suprimento') suprimentos = parseFloat(r.total);
+            if (r.tipo === 'Sangria') sangrias = parseFloat(r.total);
         });
 
+        // 4. A Matemática Final
         const esperado = valorInicial + vendasDinheiro + suprimentos - sangrias;
 
         res.json({
@@ -402,7 +411,7 @@ app.get('/api/caixa/resumo/:id', async (req, res) => {
             esperado: esperado
         });
     } catch (erro) {
-        console.error("Erro no Resumo Titânio:", erro);
+        console.error("Erro no Resumo:", erro);
         res.status(500).json({ erro: "Erro Técnico: " + String(erro.message || erro) });
     }
 });
