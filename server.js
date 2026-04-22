@@ -378,6 +378,19 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
     }
 });
 
+// 4. Registrar Sangria (Retirada) ou Suprimento (Entrada)
+app.post('/api/caixa/movimentacao', async (req, res) => {
+    const { caixa_id, tipo, valor, motivo } = req.body;
+    try {
+        const sql = "INSERT INTO movimentacoes_caixa (caixa_id, tipo, valor, motivo) VALUES ($1, $2, $3, $4) RETURNING *";
+        const resultado = await pool.query(sql, [caixa_id, tipo, valor, motivo]);
+        res.json({ sucesso: true, movimentacao: resultado.rows[0] });
+    } catch (erro) {
+        console.error("Erro ao salvar movimentacao:", erro);
+        res.status(500).json({ erro: "Erro ao registrar movimentação" });
+    }
+});
+
 // ==========================================
 // 3. LIGANDO A IGNIÇÃO (Preparado para Nuvem)
 // ==========================================
