@@ -252,6 +252,60 @@ app.delete('/api/grupos/:id', async (req, res) => {
 });
 
 // ==========================================
+// ROTAS: CATEGORIAS (Para o filtro do PDV)
+// ==========================================
+
+// 1. Listar todas as Categorias (Ordenadas pela coluna 'ordem')
+app.get('/api/categorias', async (req, res) => {
+    try {
+        const resultado = await pool.query('SELECT * FROM categorias ORDER BY ordem ASC, id ASC');
+        res.json(resultado.rows);
+    } catch (erro) {
+        console.error("Erro ao buscar categorias:", erro);
+        res.status(500).json({ erro: "Erro ao buscar categorias" });
+    }
+});
+
+// 2. Criar nova Categoria
+app.post('/api/categorias', async (req, res) => {
+    const { nome, ordem } = req.body;
+    try {
+        const sql = 'INSERT INTO categorias (nome, ordem) VALUES ($1, $2) RETURNING *';
+        const resultado = await pool.query(sql, [nome, ordem || 0]);
+        res.json({ sucesso: true, categoria: resultado.rows[0] });
+    } catch (erro) {
+        console.error("Erro ao criar categoria:", erro);
+        res.status(500).json({ erro: "Erro ao criar categoria" });
+    }
+});
+
+// 3. Atualizar Categoria
+app.put('/api/categorias/:id', async (req, res) => {
+    const { id } = req.params;
+    const { nome, ordem } = req.body;
+    try {
+        const sql = 'UPDATE categorias SET nome = $1, ordem = $2 WHERE id = $3 RETURNING *';
+        const resultado = await pool.query(sql, [nome, ordem || 0, id]);
+        res.json({ sucesso: true, categoria: resultado.rows[0] });
+    } catch (erro) {
+        console.error("Erro ao atualizar categoria:", erro);
+        res.status(500).json({ erro: "Erro ao atualizar categoria" });
+    }
+});
+
+// 4. Excluir Categoria
+app.delete('/api/categorias/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await pool.query('DELETE FROM categorias WHERE id = $1', [id]);
+        res.json({ sucesso: true, mensagem: "Categoria excluída!" });
+    } catch (erro) {
+        console.error("Erro ao excluir categoria:", erro);
+        res.status(500).json({ erro: "Erro ao excluir categoria" });
+    }
+});
+
+// ==========================================
 // ROTAS DE STATUS (LIGA/DESLIGA - CHAVINHAS)
 // ==========================================
 
