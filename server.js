@@ -54,10 +54,16 @@ app.post('/api/vendas', async (req, res) => {
             INSERT INTO vendas (codigo_venda, valor_total, forma_pagamento, status, itens) 
             VALUES ($1, $2, $3, $4, $5) RETURNING *;
         `;
-        const valores = [codigoVenda, novaVenda.valor, novaVenda.formaPagamento, "Concluída", JSON.stringify(novaVenda.itens)];
+        
+        // MÁGICA AQUI: Pega exatamente os nomes que o PDV envia
+        const valorCorreto = novaVenda.valor_total || novaVenda.total || novaVenda.valor || 0;
+        const pagamentoCorreto = novaVenda.forma_pagamento || novaVenda.formaPagamento || 'Dinheiro';
+        const itensCorretos = typeof novaVenda.itens === 'string' ? novaVenda.itens : JSON.stringify(novaVenda.itens || []);
+
+        const valores = [codigoVenda, valorCorreto, pagamentoCorreto, "Concluída", itensCorretos];
         
         const resultado = await pool.query(comandoSql, valores);
-        console.log(`💰 VENDA COM ITENS SALVA! Código: ${resultado.rows[0].codigo_venda}`);
+        console.log(`💰 VENDA SALVA! Código: ${resultado.rows[0].codigo_venda} | Pagamento: ${pagamentoCorreto}`);
         res.status(201).json({ mensagem: "Venda processada!", id: codigoVenda });
         
     } catch (erro) {
