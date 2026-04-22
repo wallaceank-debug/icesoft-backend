@@ -339,6 +339,46 @@ app.put('/api/grupos/:id/status', async (req, res) => {
 });
 
 // ==========================================
+// ROTAS DE CONTROLE DE CAIXA
+// ==========================================
+
+// 1. Ver status atual do caixa (Sempre pega o último criado)
+app.get('/api/caixa/status', async (req, res) => {
+    try {
+        const resultado = await pool.query('SELECT * FROM controle_caixa ORDER BY id DESC LIMIT 1');
+        // Se não tiver nenhum, devolve "Fechado"
+        res.json(resultado.rows[0] || { status: 'Fechado' });
+    } catch (erro) {
+        res.status(500).json({ erro: "Erro ao buscar caixa" });
+    }
+});
+
+// 2. Abrir o Caixa
+app.post('/api/caixa/abrir', async (req, res) => {
+    const { valor_inicial } = req.body;
+    try {
+        const sql = "INSERT INTO controle_caixa (valor_inicial, status) VALUES ($1, 'Aberto') RETURNING *";
+        const resultado = await pool.query(sql, [valor_inicial || 0]);
+        res.json({ sucesso: true, caixa: resultado.rows[0] });
+    } catch (erro) {
+        res.status(500).json({ erro: "Erro ao abrir caixa" });
+    }
+});
+
+// 3. Fechar o Caixa
+app.put('/api/caixa/fechar/:id', async (req, res) => {
+    const { id } = req.params;
+    const { valor_informado } = req.body;
+    try {
+        const sql = "UPDATE controle_caixa SET status = 'Fechado', data_fechamento = CURRENT_TIMESTAMP, valor_informado = $1 WHERE id = $2 RETURNING *";
+        const resultado = await pool.query(sql, [valor_informado || 0, id]);
+        res.json({ sucesso: true, caixa: resultado.rows[0] });
+    } catch (erro) {
+        res.status(500).json({ erro: "Erro ao fechar caixa" });
+    }
+});
+
+// ==========================================
 // 3. LIGANDO A IGNIÇÃO (Preparado para Nuvem)
 // ==========================================
 // A nuvem injeta a própria porta no 'process.env.PORT'. Se não tiver, usa a 3000.
