@@ -135,15 +135,17 @@ app.post('/api/login', async (req, res) => {
 });
 
 // ==========================================
-// ROTA: Adicionar Novo Produto (CREATE) - ATUALIZADO
+// ROTA: Adicionar Novo Produto (CREATE) - ATUALIZADO V2
 // ==========================================
 app.post('/api/produtos', async (req, res) => {
-    const { nome, descricao, preco, emoji, grupos_ids } = req.body;
-    const grupos = grupos_ids || []; // Agora recebe uma lista de IDs (Ex: [1, 3])
+    // Adicionamos a 'categoria' na porta de entrada
+    const { nome, descricao, preco, emoji, categoria, grupos_ids } = req.body;
+    const grupos = grupos_ids || []; 
+    const cat = categoria || 'Outros'; // Proteção anti-vazio
 
     try {
-        const querySql = 'INSERT INTO produtos (nome, descricao, preco, emoji, grupos_ids) VALUES ($1, $2, $3, $4, $5) RETURNING *';
-        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, grupos]);
+        const querySql = 'INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *';
+        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, cat, grupos]);
         
         res.json({ sucesso: true, produto: resultado.rows[0] });
     } catch (erro) {
@@ -153,16 +155,17 @@ app.post('/api/produtos', async (req, res) => {
 });
 
 // ==========================================
-// ROTA: Editar Produto Existente (UPDATE) - ATUALIZADO
+// ROTA: Editar Produto Existente (UPDATE) - ATUALIZADO V2
 // ==========================================
 app.put('/api/produtos/:id', async (req, res) => {
     const { id } = req.params; 
-    const { nome, descricao, preco, emoji, grupos_ids } = req.body;
+    const { nome, descricao, preco, emoji, categoria, grupos_ids } = req.body;
     const grupos = grupos_ids || [];
+    const cat = categoria || 'Outros';
 
     try {
-        const querySql = 'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, grupos_ids = $5 WHERE id = $6 RETURNING *';
-        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, grupos, id]);
+        const querySql = 'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6 WHERE id = $7 RETURNING *';
+        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, cat, grupos, id]);
         
         res.json({ sucesso: true, produto: resultado.rows[0] });
     } catch (erro) {
