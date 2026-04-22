@@ -401,15 +401,27 @@ app.get('/api/caixa/resumo/:id', async (req, res) => {
         const dataAbertura = caixaRes.rows[0].data_abertura;
         const valorInicial = parseFloat(caixaRes.rows[0].valor_inicial);
 
-        // Vendas: Tenta buscar as vendas usando proteção contra erro de nome de coluna
+        // Tenta buscar as vendas adivinhando o nome da coluna de data da sua tabela
         let vendasDinheiro = 0;
         try {
-            const vRes = await pool.query("SELECT COALESCE(SUM(total), 0) as total FROM vendas WHERE forma_pagamento = 'Dinheiro' AND data_venda >= $1", [dataAbertura]);
-            vendasDinheiro = parseFloat(vRes.rows[0].total);
-        } catch (e) {
-            // Se a coluna data_venda não existir, puxa o total genérico para não quebrar a tela
-            const vRes2 = await pool.query("SELECT COALESCE(SUM(total), 0) as total FROM vendas WHERE forma_pagamento = 'Dinheiro'");
-            vendasDinheiro = parseFloat(vRes2.rows[0].total);
+            // Tentativa 1: 'data_venda'
+            const v1 = await pool.query("SELECT COALESCE(SUM(total), 0) as total FROM vendas WHERE forma_pagamento = 'Dinheiro' AND data_venda >= $1", [dataAbertura]);
+            vendasDinheiro = parseFloat(v1.rows[0].total);
+        } catch (e1) {
+            try {
+                // Tentativa 2: 'data'
+                const v2 = await pool.query("SELECT COALESCE(SUM(total), 0) as total FROM vendas WHERE forma_pagamento = 'Dinheiro' AND data >= $1", [dataAbertura]);
+                vendasDinheiro = parseFloat(v2.rows[0].total);
+            } catch (e2) {
+                try {
+                    // Tentativa 3: 'created_at'
+                    const v3 = await pool.query("SELECT COALESCE(SUM(total), 0) as total FROM vendas WHERE forma_pagamento = 'Dinheiro' AND created_at >= $1", [dataAbertura]);
+                    vendasDinheiro = parseFloat(v3.rows[0].total);
+                } catch (e3) {
+                    // Se nada der certo, não trava a tela, apenas zera as vendas de hoje
+                    console.log("Erro ao encontrar coluna de data nas vendas.");
+                }
+            }
         }
 
         const movRes = await pool.query("SELECT tipo, COALESCE(SUM(valor), 0) as total FROM movimentacoes_caixa WHERE caixa_id = $1 GROUP BY tipo", [id]);
