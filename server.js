@@ -365,13 +365,13 @@ app.post('/api/caixa/abrir', async (req, res) => {
     }
 });
 
-// 3. Fechar o Caixa
+// SUBSTITUA A ROTA DE FECHAR ANTIGA POR ESTA NOVA (Que salva a diferença)
 app.put('/api/caixa/fechar/:id', async (req, res) => {
     const { id } = req.params;
-    const { valor_informado } = req.body;
+    const { valor_informado, valor_sistema } = req.body;
     try {
-        const sql = "UPDATE controle_caixa SET status = 'Fechado', data_fechamento = CURRENT_TIMESTAMP, valor_informado = $1 WHERE id = $2 RETURNING *";
-        const resultado = await pool.query(sql, [valor_informado || 0, id]);
+        const sql = "UPDATE controle_caixa SET status = 'Fechado', data_fechamento = CURRENT_TIMESTAMP, valor_informado = $1, valor_sistema = $2 WHERE id = $3 RETURNING *";
+        const resultado = await pool.query(sql, [valor_informado || 0, valor_sistema || 0, id]);
         res.json({ sucesso: true, caixa: resultado.rows[0] });
     } catch (erro) {
         res.status(500).json({ erro: "Erro ao fechar caixa" });
@@ -388,6 +388,46 @@ app.post('/api/caixa/movimentacao', async (req, res) => {
     } catch (erro) {
         console.error("Erro ao salvar movimentacao:", erro);
         res.status(500).json({ erro: "Erro ao registrar movimentação" });
+    }
+});
+
+// 5. Calcular o Resumo do Caixa para a Conferência
+app.get('/api/caixa/resumo/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        // 1. Pega os dados do caixa atual
+        const caixaRes = await pool.query('SELECT data_abertura, valor_inicial FROM controle_caixa WHERE id = $1', [id]);
+        if (caixaRes.rows.length === 0) return res.status(404).json({ erro: "Caixa não encontrado" });
+
+        const dataAbertura = caixaRes.rows[0].data_abertura;
+        const valorInicial = parseFloat(caixaRes.rows[0].valor_inicial);
+
+        // 2. Soma todas as Vendas em Dinheiro desde a abertura
+        const vendasRes = await pool.query("SELECT COALESCE(SUM(total), 0) as total_vendas FROM vendas WHERE forma_pagamento = 'Dinheiro' AND data_venda >= $1", [dataAbertura]);
+        const vendasDinheiro = parseFloat(vendasRes.rows[0].total_vendas);
+
+        // 3. Soma Suprimentos e Sangrias
+        const movRes = await pool.query("SELECT tipo, COALESCE(SUM(valor), 0) as total FROM movimentacoes_caixa WHERE caixa_id = $1 GROUP BY tipo", [id]);
+        let suprimentos = 0;
+        let sangrias = 0;
+        movRes.rows.forEach(row => {
+            if (row.tipo === 'Suprimento') suprimentos = parseFloat(row.total);
+            if (row.tipo === 'Sangria') sangrias = parseFloat(row.total);
+        });
+
+        // 4. Calcula o que deveria ter na gaveta
+        const esperado = valorInicial + vendasDinheiro + suprimentos - sangrias;
+
+        res.json({
+            fundo: valorInicial,
+            vendas_dinheiro: vendasDinheiro,
+            suprimentos: suprimentos,
+            sangrias: sangrias,
+            esperado: esperado
+        });
+    } catch (erro) {
+        console.error("Erro resumo:", erro);
+        res.status(500).json({ erro: "Erro ao gerar resumo" });
     }
 });
 
