@@ -370,7 +370,9 @@ app.get('/api/caixa/resumo/:id', async (req, res) => {
         let vendasDinheiro = 0;
         
         vendasRes.rows.forEach(venda => {
-            const dataVenda = new Date(venda.data_venda || venda.data || venda.created_at || venda.data_criacao || 0);
+            // AQUI ESTAVA O BUG: Faltava o "data_hora" que é o nome real da sua coluna!
+            const dataVenda = new Date(venda.data_hora || venda.data_venda || venda.data || venda.created_at || venda.data_criacao || 0);
+            
             if (dataVenda >= abertura && venda.forma_pagamento === 'Dinheiro') {
                 vendasDinheiro += parseFloat(venda.total || venda.valor_total || 0);
             }
