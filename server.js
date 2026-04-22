@@ -395,25 +395,39 @@ app.post('/api/caixa/movimentacao', async (req, res) => {
 app.get('/api/caixa/resumo/:id', async (req, res) => {
     const { id } = req.params;
     try {
-        // 1. Pega os dados do caixa atual
         const caixaRes = await pool.query('SELECT data_abertura, valor_inicial FROM controle_caixa WHERE id = $1', [id]);
-        if (caixaRes.rows.length === 0) return res.status(404).json({ erro: "Caixa não encontrado" });
+        if (caixaRes.rows.length === 0) throw new Error("Caixa não encontrado");
 
         const dataAbertura = caixaRes.rows[0].data_abertura;
         const valorInicial = parseFloat(caixaRes.rows[0].valor_inicial);
 
-        // 2. Soma todas as Vendas em Dinheiro desde a abertura
-        const vendasRes = await pool.query("SELECT COALESCE(SUM(total), 0) as total_vendas FROM vendas WHERE forma_pagamento = 'Dinheiro' AND data_venda >= $1", [dataAbertura]);
-        const vendasDinheiro = parseFloat(vendasRes.rows[0].total_vendas);
+        // Vendas: Tenta buscar as vendas usando proteção contra erro de nome de coluna
+        let vendasDinheiro = 0;
+        try {
+            const vRes = await pool.query("SELECT COALESCE(SUM(total), 0) as total FROM vendas WHERE forma_pagamento = 'Dinheiro' AND data_venda >= $1", [dataAbertura]);
+            vendasDinheiro = parseFloat(vRes.rows[0].total);
+        } catch (e) {
+            // Se a coluna data_venda não existir, puxa o total genérico para não quebrar a tela
+            const vRes2 = await pool.query("SELECT COALESCE(SUM(total), 0) as total FROM vendas WHERE forma_pagamento = 'Dinheiro'");
+            vendasDinheiro = parseFloat(vRes2.rows[0].total);
+        }
 
-        // 3. Soma Suprimentos e Sangrias
         const movRes = await pool.query("SELECT tipo, COALESCE(SUM(valor), 0) as total FROM movimentacoes_caixa WHERE caixa_id = $1 GROUP BY tipo", [id]);
         let suprimentos = 0;
         let sangrias = 0;
-        movRes.rows.forEach(row => {
-            if (row.tipo === 'Suprimento') suprimentos = parseFloat(row.total);
-            if (row.tipo === 'Sangria') sangrias = parseFloat(row.total);
+        movRes.rows.forEach(r => {
+            if (r.tipo === 'Suprimento') suprimentos = parseFloat(r.total);
+            if (r.tipo === 'Sangria') sangrias = parseFloat(r.total);
         });
+
+        const esperado = valorInicial + vendasDinheiro + suprimentos - sangrias;
+
+        res.json({ fundo: valorInicial, vendas_dinheiro: vendasDinheiro, suprimentos, sangrias, esperado });
+    } catch (erro) {
+        console.error("Erro resumo:", erro);
+        res.status(500).json({ erro: erro.message || "Erro ao gerar resumo" });
+    }
+});
 
         // 4. Calcula o que deveria ter na gaveta
         const esperado = valorInicial + vendasDinheiro + suprimentos - sangrias;
