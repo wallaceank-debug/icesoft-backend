@@ -470,9 +470,11 @@ app.put('/api/mesas/:id', async (req, res) => {
 app.delete('/api/mesas/:id', async (req, res) => {
     const { id } = req.params;
     try {
-        await pool.query('DELETE FROM mesas_ativas WHERE id = $1');
+        // O BUG ESTAVA AQUI: Faltava o '[id]' no final para o banco saber quem apagar!
+        await pool.query('DELETE FROM mesas_ativas WHERE id = $1', [id]);
         res.json({ sucesso: true });
     } catch (erro) {
+        console.error("Erro ao fechar mesa:", erro);
         res.status(500).json({ erro: "Erro ao fechar mesa" });
     }
 });
