@@ -417,6 +417,67 @@ app.get('/api/caixa/resumo/:id', async (req, res) => {
 });
 
 // ==========================================
+// ROTAS DE MESAS E COMANDAS
+// ==========================================
+
+// 1. Criar a tabela automaticamente caso não exista (Mágica do Backend)
+pool.query(`
+    CREATE TABLE IF NOT EXISTS mesas_ativas (
+        id SERIAL PRIMARY KEY,
+        numero VARCHAR(10) NOT NULL,
+        itens JSONB DEFAULT '[]',
+        status VARCHAR(20) DEFAULT 'Ocupada',
+        data_abertura TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+`).then(() => console.log("📦 Tabela de Mesas verificada/criada!")).catch(console.error);
+
+// 2. Listar todas as mesas abertas
+app.get('/api/mesas', async (req, res) => {
+    try {
+        const resultado = await pool.query('SELECT * FROM mesas_ativas ORDER BY numero ASC');
+        res.json(resultado.rows);
+    } catch (erro) {
+        res.status(500).json({ erro: "Erro ao buscar mesas" });
+    }
+});
+
+// 3. Abrir nova mesa (Adicionando o primeiro item)
+app.post('/api/mesas', async (req, res) => {
+    const { numero, itens } = req.body;
+    try {
+        const sql = "INSERT INTO mesas_ativas (numero, itens) VALUES ($1, $2) RETURNING *";
+        const resultado = await pool.query(sql, [numero, JSON.stringify(itens || [])]);
+        res.status(201).json(resultado.rows[0]);
+    } catch (erro) {
+        res.status(500).json({ erro: "Erro ao abrir mesa" });
+    }
+});
+
+// 4. Atualizar itens de uma mesa (Adicionar mais itens ou remover os que foram pagos)
+app.put('/api/mesas/:id', async (req, res) => {
+    const { id } = req.params;
+    const { itens } = req.body;
+    try {
+        const sql = "UPDATE mesas_ativas SET itens = $1 WHERE id = $2 RETURNING *";
+        const resultado = await pool.query(sql, [JSON.stringify(itens), id]);
+        res.json(resultado.rows[0]);
+    } catch (erro) {
+        res.status(500).json({ erro: "Erro ao atualizar mesa" });
+    }
+});
+
+// 5. Fechar a mesa (Excluir após pagamento total)
+app.delete('/api/mesas/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await pool.query('DELETE FROM mesas_ativas WHERE id = $1');
+        res.json({ sucesso: true });
+    } catch (erro) {
+        res.status(500).json({ erro: "Erro ao fechar mesa" });
+    }
+});
+
+// ==========================================
 // 3. LIGANDO A IGNIÇÃO (Preparado para Nuvem)
 // ==========================================
 const PORTA = process.env.PORT || 3000;
