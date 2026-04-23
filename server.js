@@ -420,7 +420,7 @@ app.get('/api/caixa/resumo/:id', async (req, res) => {
 // ROTAS DE MESAS E COMANDAS
 // ==========================================
 
-// 1. Criar a tabela automaticamente caso não exista (Mágica do Backend)
+// 1. Criar a tabela automaticamente caso não exista
 pool.query(`
     CREATE TABLE IF NOT EXISTS mesas_ativas (
         id SERIAL PRIMARY KEY,
@@ -429,7 +429,7 @@ pool.query(`
         status VARCHAR(20) DEFAULT 'Ocupada',
         data_abertura TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
-`).then(() => console.log("📦 Tabela de Mesas verificada/criada!")).catch(console.error);
+`).then(() => console.log("📦 Tabela de Mesas verificada!")).catch(console.error);
 
 // 2. Listar todas as mesas abertas
 app.get('/api/mesas', async (req, res) => {
@@ -441,7 +441,7 @@ app.get('/api/mesas', async (req, res) => {
     }
 });
 
-// 3. Abrir nova mesa (Adicionando o primeiro item)
+// 3. Abrir nova mesa
 app.post('/api/mesas', async (req, res) => {
     const { numero, itens } = req.body;
     try {
@@ -453,7 +453,7 @@ app.post('/api/mesas', async (req, res) => {
     }
 });
 
-// 4. Atualizar itens de uma mesa (Adicionar mais itens ou remover os que foram pagos)
+// 4. Atualizar itens de uma mesa
 app.put('/api/mesas/:id', async (req, res) => {
     const { id } = req.params;
     const { itens } = req.body;
@@ -470,7 +470,7 @@ app.put('/api/mesas/:id', async (req, res) => {
 app.delete('/api/mesas/:id', async (req, res) => {
     const { id } = req.params;
     try {
-        // O BUG ESTAVA AQUI: Faltava o '[id]' no final para o banco saber quem apagar!
+        // Agora com o ID perfeitamente linkado para o banco não se perder!
         await pool.query('DELETE FROM mesas_ativas WHERE id = $1', [id]);
         res.json({ sucesso: true });
     } catch (erro) {
