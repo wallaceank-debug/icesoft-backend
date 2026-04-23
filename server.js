@@ -480,6 +480,40 @@ app.delete('/api/mesas/:id', async (req, res) => {
 });
 
 // ==========================================
+// STATUS DA LOJA (LIGA/DESLIGA CARDÁPIO)
+// ==========================================
+
+// 1. Cria a tabela de configurações e já deixa a loja "aberta" por padrão
+pool.query(`
+    CREATE TABLE IF NOT EXISTS configuracoes (
+        chave VARCHAR(50) PRIMARY KEY,
+        valor VARCHAR(50) NOT NULL
+    );
+    INSERT INTO configuracoes (chave, valor) VALUES ('status_delivery', 'aberto') ON CONFLICT (chave) DO NOTHING;
+`).then(() => console.log("📦 Tabela de Configurações verificada!")).catch(console.error);
+
+// 2. Rota para o cliente (e PDV) perguntar se a loja está aberta
+app.get('/api/loja/status', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'status_delivery'");
+        res.json({ status: result.rows[0] ? result.rows[0].valor : 'aberto' });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao buscar status" });
+    }
+});
+
+// 3. Rota para o PDV mandar fechar ou abrir a loja
+app.put('/api/loja/status', async (req, res) => {
+    const { status } = req.body; 
+    try {
+        await pool.query("UPDATE configuracoes SET valor = $1 WHERE chave = 'status_delivery'", [status]);
+        res.json({ sucesso: true, status });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao atualizar status" });
+    }
+});
+
+// ==========================================
 // 3. LIGANDO A IGNIÇÃO (Preparado para Nuvem)
 // ==========================================
 const PORTA = process.env.PORT || 3000;
