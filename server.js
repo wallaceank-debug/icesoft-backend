@@ -513,6 +513,37 @@ app.put('/api/loja/status', async (req, res) => {
     }
 });
 
+// 4. Buscar todas as configurações da loja (Cores, Nome, etc)
+app.get('/api/configuracoes', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT * FROM configuracoes");
+        const configs = {};
+        // Transforma a lista do banco em um objeto fácil do Javascript ler
+        result.rows.forEach(row => configs[row.chave] = row.valor);
+        res.json(configs);
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao buscar configurações" });
+    }
+});
+
+// 5. Salvar várias configurações de uma vez (Painel Delivery)
+app.put('/api/configuracoes', async (req, res) => {
+    const configs = req.body; // Recebe os dados do seu painel
+    try {
+        // Percorre cada configuração e salva/atualiza no banco
+        for (const [chave, valor] of Object.entries(configs)) {
+            await pool.query(
+                `INSERT INTO configuracoes (chave, valor) VALUES ($1, $2)
+                 ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor`,
+                [chave, valor]
+            );
+        }
+        res.json({ sucesso: true });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao salvar configurações" });
+    }
+});
+
 // ==========================================
 // 3. LIGANDO A IGNIÇÃO (Preparado para Nuvem)
 // ==========================================
