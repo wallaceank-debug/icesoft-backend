@@ -15,10 +15,11 @@ const pool = new Pool({
     connectionString: 'postgresql://neondb_owner:npg_w2HdxUFe0EXA@ep-crimson-violet-amb5wph0.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require'
 });
 
-// ATUALIZAÇÃO DA TABELA PARA SUPORTAR O KANBAN
+// ATUALIZAÇÃO DA TABELA PARA SUPORTAR O KANBAN E O DELIVERY
 pool.query(`
     ALTER TABLE vendas ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'Concluída';
-`).then(() => console.log("📦 Tabela de vendas blindada com Status!")).catch(console.error);
+    ALTER TABLE vendas ADD COLUMN IF NOT EXISTS produto_nome VARCHAR(255) DEFAULT 'Pedido Diversos';
+`).then(() => console.log("📦 Tabela de vendas blindada com Status e Produto_Nome!")).catch(console.error);
 
 // Teste de conexão logo ao ligar a chave
 pool.connect()
