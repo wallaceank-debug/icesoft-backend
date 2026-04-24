@@ -483,14 +483,17 @@ app.delete('/api/mesas/:id', async (req, res) => {
 // STATUS DA LOJA (LIGA/DESLIGA CARDÁPIO)
 // ==========================================
 
-// 1. Cria a tabela de configurações e já deixa a loja "aberta" por padrão
+// 1. Cria a tabela e garante que a coluna "valor" suporte textos gigantes (TEXT)
 pool.query(`
     CREATE TABLE IF NOT EXISTS configuracoes (
         chave VARCHAR(50) PRIMARY KEY,
-        valor VARCHAR(50) NOT NULL
+        valor TEXT NOT NULL
     );
+    -- A MÁGICA: Se a tabela já existir com tamanho pequeno, nós esticamos ela para TEXT!
+    ALTER TABLE configuracoes ALTER COLUMN valor TYPE TEXT;
+    
     INSERT INTO configuracoes (chave, valor) VALUES ('status_delivery', 'aberto') ON CONFLICT (chave) DO NOTHING;
-`).then(() => console.log("📦 Tabela de Configurações verificada!")).catch(console.error);
+`).then(() => console.log("📦 Tabela de Configurações atualizada para suporte a textos longos!")).catch(console.error);
 
 // 2. Rota para o cliente (e PDV) perguntar se a loja está aberta
 app.get('/api/loja/status', async (req, res) => {
