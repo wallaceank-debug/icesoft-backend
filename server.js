@@ -51,15 +51,12 @@ app.get('/api/produtos', async (req, res) => {
 
 // ROTA DE SALVAR VENDAS (PDV E DELIVERY)
 app.post('/api/vendas', async (req, res) => {
-    // Puxamos as variáveis do celular
     const { produto_nome, valor_total, total, forma_pagamento, itens, status } = req.body;
     
-    // Pega o valor correto independente de como o PDV ou Celular mandaram
     const valorFinal = valor_total || total || 0;
     const statusFinal = status || 'Concluída'; 
     
     try {
-        // CORREÇÃO: Voltamos a usar a coluna "valor_total" que o seu banco já conhece perfeitamente!
         await pool.query(
             `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status) 
              VALUES ($1, $2, $3, $4, $5)`,
@@ -67,8 +64,9 @@ app.post('/api/vendas', async (req, res) => {
         );
         res.status(201).json({ sucesso: true });
     } catch (erro) {
-        console.error("Erro ao salvar venda:", erro);
-        res.status(500).json({ erro: "Erro interno no servidor" });
+        // 🚨 A MÁGICA ESTÁ AQUI: Agora ele manda o erro REAL do PostgreSQL pra você!
+        console.error("Erro EXATO no banco de dados:", erro.message);
+        res.status(500).json({ erro: erro.message });
     }
 });
 
