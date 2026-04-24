@@ -51,17 +51,19 @@ app.get('/api/produtos', async (req, res) => {
 
 // ROTA DE SALVAR VENDAS (PDV E DELIVERY)
 app.post('/api/vendas', async (req, res) => {
-    // Agora o servidor puxa o status que o celular enviou
-    const { produto_nome, valor_total, forma_pagamento, itens, status } = req.body;
+    // Puxamos as variáveis do celular
+    const { produto_nome, valor_total, total, forma_pagamento, itens, status } = req.body;
     
-    // Se não vier status (ex: venda feita no PDV físico), ele assume que já está "Concluída"
+    // Pega o valor correto independente de como o PDV ou Celular mandaram
+    const valorFinal = valor_total || total || 0;
     const statusFinal = status || 'Concluída'; 
     
     try {
+        // AQUI ESTAVA O ERRO! Voltamos a usar a coluna "total" que o seu banco já conhece!
         await pool.query(
-            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status) 
+            `INSERT INTO vendas (produto_nome, total, forma_pagamento, itens, status) 
              VALUES ($1, $2, $3, $4, $5)`,
-            [produto_nome, valor_total, forma_pagamento, itens, statusFinal]
+            [produto_nome, valorFinal, forma_pagamento, itens, statusFinal]
         );
         res.status(201).json({ sucesso: true });
     } catch (erro) {
