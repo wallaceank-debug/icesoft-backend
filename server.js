@@ -157,7 +157,7 @@ app.post('/api/login', async (req, res) => {
 // ROTA: Adicionar Novo Produto (CREATE)
 // ==========================================
 app.post('/api/produtos', async (req, res) => {
-    const { nome, descricao, preco, emoji, categoria, grupos_ids } = req.body;
+    const { nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url } = req.body;
     const grupos = grupos_ids || []; 
     const cat = categoria || 'Outros';
 
@@ -176,7 +176,7 @@ app.post('/api/produtos', async (req, res) => {
 // ==========================================
 app.put('/api/produtos/:id', async (req, res) => {
     const { id } = req.params; 
-    const { nome, descricao, preco, emoji, categoria, grupos_ids } = req.body;
+    const { nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url } = req.body;
     const grupos = grupos_ids || [];
     const cat = categoria || 'Outros';
 
