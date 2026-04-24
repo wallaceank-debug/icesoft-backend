@@ -575,11 +575,48 @@ app.put('/api/configuracoes', async (req, res) => {
 });
 
 // ==========================================
+// ROTAS DE BAIRROS (TAXA DE ENTREGA)
+// ==========================================
+app.get('/api/bairros', async (req, res) => {
+    try {
+        const resultado = await pool.query('SELECT * FROM bairros ORDER BY nome ASC');
+        res.json(resultado.rows);
+    } catch (erro) { res.status(500).json({ erro: "Erro ao buscar bairros" }); }
+});
+
+app.post('/api/bairros', async (req, res) => {
+    const { nome, taxa } = req.body;
+    try {
+        const resultado = await pool.query('INSERT INTO bairros (nome, taxa) VALUES ($1, $2) RETURNING *', [nome, taxa]);
+        res.json(resultado.rows[0]);
+    } catch (erro) { res.status(500).json({ erro: "Erro ao criar bairro" }); }
+});
+
+app.delete('/api/bairros/:id', async (req, res) => {
+    try {
+        await pool.query('DELETE FROM bairros WHERE id = $1', [req.params.id]);
+        res.json({ sucesso: true });
+    } catch (erro) { res.status(500).json({ erro: "Erro ao excluir bairro" }); }
+});
+
+// ==========================================
 // 📦 GARANTIA DA GAVETA DE FOTOS NO BANCO
 // ==========================================
 pool.query('ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_url TEXT;')
     .then(() => console.log('📸 Gaveta de fotos criada e pronta para uso!'))
     .catch(err => console.error('Erro ao criar gaveta de fotos:', err));
+
+// ==========================================
+// 🗺️ CRIAÇÃO DA TABELA DE BAIRROS E TAXAS
+// ==========================================
+pool.query(`
+    CREATE TABLE IF NOT EXISTS bairros (
+        id SERIAL PRIMARY KEY,
+        nome VARCHAR(100) NOT NULL,
+        taxa DECIMAL(10,2) NOT NULL DEFAULT 0.00
+    );
+`).then(() => console.log('🗺️ Tabela de Bairros criada e pronta!'))
+  .catch(err => console.error('Erro ao criar tabela de bairros:', err));
 
 // ==========================================
 // 3. LIGANDO A IGNIÇÃO (Preparado para Nuvem)
