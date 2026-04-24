@@ -575,6 +575,13 @@ app.put('/api/configuracoes', async (req, res) => {
 });
 
 // ==========================================
+// 📦 GARANTIA DA GAVETA DE FOTOS NO BANCO
+// ==========================================
+pool.query('ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_url TEXT;')
+    .then(() => console.log('📸 Gaveta de fotos criada e pronta para uso!'))
+    .catch(err => console.error('Erro ao criar gaveta de fotos:', err));
+
+// ==========================================
 // 3. LIGANDO A IGNIÇÃO (Preparado para Nuvem)
 // ==========================================
 const PORTA = process.env.PORT || 3000;
