@@ -59,9 +59,9 @@ app.post('/api/vendas', async (req, res) => {
     const statusFinal = status || 'Concluída'; 
     
     try {
-        // AQUI ESTAVA O ERRO! Voltamos a usar a coluna "total" que o seu banco já conhece!
+        // CORREÇÃO: Voltamos a usar a coluna "valor_total" que o seu banco já conhece perfeitamente!
         await pool.query(
-            `INSERT INTO vendas (produto_nome, total, forma_pagamento, itens, status) 
+            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status) 
              VALUES ($1, $2, $3, $4, $5)`,
             [produto_nome, valorFinal, forma_pagamento, itens, statusFinal]
         );
