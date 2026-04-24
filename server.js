@@ -54,11 +54,7 @@ app.get('/api/produtos', async (req, res) => {
 });
 
 // ROTA DE SALVAR VENDAS (PDV E DELIVERY)
-app.post('/api/vendas', async (req, res) => {
-
-    // 🚨 O RASTREADOR GPS (Vai imprimir na tela preta da Render)
-    console.log("📥 PACOTE CHEGOU DO CELULAR:", req.body);
-    
+app.post('/api/vendas', async (req, res) => {    
     // Agora o servidor puxa TUDO do celular
     const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco } = req.body;
     
