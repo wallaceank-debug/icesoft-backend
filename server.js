@@ -15,6 +15,11 @@ const pool = new Pool({
     connectionString: 'postgresql://neondb_owner:npg_w2HdxUFe0EXA@ep-crimson-violet-amb5wph0.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require'
 });
 
+// ATUALIZAÇÃO DA TABELA PARA SUPORTAR O KANBAN
+pool.query(`
+    ALTER TABLE vendas ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'Concluída';
+`).then(() => console.log("📦 Tabela de vendas blindada com Status!")).catch(console.error);
+
 // Teste de conexão logo ao ligar a chave
 pool.connect()
     .then(() => console.log('☁️ Banco de Dados PostgreSQL Conectado com Sucesso!'))
