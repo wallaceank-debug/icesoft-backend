@@ -19,7 +19,10 @@ const pool = new Pool({
 pool.query(`
     ALTER TABLE vendas ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'Concluída';
     ALTER TABLE vendas ADD COLUMN IF NOT EXISTS produto_nome VARCHAR(255) DEFAULT 'Pedido Diversos';
-`).then(() => console.log("📦 Tabela de vendas blindada com Status e Produto_Nome!")).catch(console.error);
+    ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cliente_nome VARCHAR(100);
+    ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cliente_telefone VARCHAR(20);
+    ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cliente_endereco TEXT;
+`).then(() => console.log("📦 Tabela de vendas blindada com Dados do Cliente!")).catch(console.error);
 
 // Teste de conexão logo ao ligar a chave
 pool.connect()
@@ -52,20 +55,20 @@ app.get('/api/produtos', async (req, res) => {
 
 // ROTA DE SALVAR VENDAS (PDV E DELIVERY)
 app.post('/api/vendas', async (req, res) => {
-    const { produto_nome, valor_total, total, forma_pagamento, itens, status } = req.body;
+    // Agora o servidor puxa TUDO do celular
+    const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco } = req.body;
     
     const valorFinal = valor_total || total || 0;
     const statusFinal = status || 'Concluída'; 
     
     try {
         await pool.query(
-            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status) 
-             VALUES ($1, $2, $3, $4, $5)`,
-            [produto_nome, valorFinal, forma_pagamento, itens, statusFinal]
+            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [produto_nome, valorFinal, forma_pagamento, itens, statusFinal, cliente_nome, cliente_telefone, cliente_endereco]
         );
         res.status(201).json({ sucesso: true });
     } catch (erro) {
-        // 🚨 A MÁGICA ESTÁ AQUI: Agora ele manda o erro REAL do PostgreSQL pra você!
         console.error("Erro EXATO no banco de dados:", erro.message);
         res.status(500).json({ erro: erro.message });
     }
