@@ -29,6 +29,12 @@ pool.connect()
     .then(() => console.log('☁️ Banco de Dados PostgreSQL Conectado com Sucesso!'))
     .catch(err => console.error('❌ Erro ao conectar no banco:', err));
 
+// ATUALIZAÇÃO DA TABELA (Adicione esta linha junto com as outras)
+pool.query(`
+    // ... (suas outras linhas) ...
+    ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_url TEXT;
+`).then(() => console.log("📦 Tabela de produtos pronta para receber Fotos!")).catch(console.error);
+
 // ==========================================
 // 2. ROTAS (A API DO SISTEMA)
 // ==========================================
