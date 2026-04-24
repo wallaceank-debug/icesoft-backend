@@ -72,6 +72,21 @@ app.post('/api/vendas', async (req, res) => {
     }
 });
 
+// ==========================================
+// KANBAN: ATUALIZAR STATUS DO PEDIDO
+// ==========================================
+app.put('/api/vendas/:id/status', async (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body;
+    try {
+        await pool.query("UPDATE vendas SET status = $1 WHERE id = $2", [status, id]);
+        res.json({ sucesso: true });
+    } catch (e) {
+        console.error("Erro ao atualizar status:", e);
+        res.status(500).json({ erro: "Erro ao atualizar status no banco" });
+    }
+});
+
 // ROTA 3: Ler Vendas da Nuvem (Para o Dashboard no futuro)
 app.get('/api/vendas', async (req, res) => {
     try {
