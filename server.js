@@ -162,8 +162,10 @@ app.post('/api/produtos', async (req, res) => {
     const cat = categoria || 'Outros';
 
     try {
-        const querySql = 'INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *';
-        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, cat, grupos]);
+        // 📸 CORREÇÃO: Adicionamos o imagem_url e o $7
+        const querySql = 'INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *';
+        // 📸 CORREÇÃO: Colocamos o imagem_url na lista final
+        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, cat, grupos, imagem_url]);
         res.json({ sucesso: true, produto: resultado.rows[0] });
     } catch (erro) {
         console.error("Erro ao cadastrar produto:", erro);
@@ -181,8 +183,10 @@ app.put('/api/produtos/:id', async (req, res) => {
     const cat = categoria || 'Outros';
 
     try {
-        const querySql = 'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6 WHERE id = $7 RETURNING *';
-        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, cat, grupos, id]);
+        // 📸 CORREÇÃO: Adicionamos imagem_url = $7 e mudamos o id para $8
+        const querySql = 'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7 WHERE id = $8 RETURNING *';
+        // 📸 CORREÇÃO: Colocamos o imagem_url e o id na ordem certinha!
+        const resultado = await pool.query(querySql, [nome, descricao, preco, emoji, cat, grupos, imagem_url, id]);
         res.json({ sucesso: true, produto: resultado.rows[0] });
     } catch (erro) {
         console.error("Erro ao editar produto:", erro);
