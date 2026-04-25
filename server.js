@@ -1,14 +1,23 @@
 // Importando as peças do motor
 const express = require('express');
 const cors = require('cors');
-const { Pool } = require('pg'); // ⬅️ O novo "motorista" do Banco de Dados
+const { Pool } = require('pg');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
 const app = express();
-app.use(cors()); 
-app.use(express.json());
+
+// 1. Configuração de CORS (Permissão total para a Vercel)
+app.use(cors({
+    origin: '*', 
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// 2. Aumentando o limite de tamanho (Aceitando fotos de até 50MB)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Libera o acesso público para as fotos do cardápio
 app.use('/uploads', express.static('/app/uploads'));
@@ -17,14 +26,12 @@ app.use('/uploads', express.static('/app/uploads'));
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         const dir = '/app/uploads';
-        // Se a pasta não existir por algum motivo, ele cria na hora
         if (!fs.existsSync(dir)){
             fs.mkdirSync(dir, { recursive: true });
         }
         cb(null, dir);
     },
     filename: function (req, file, cb) {
-        // Cria um nome único para a foto (Ex: 171404000-7492.jpg) para não dar conflito
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         cb(null, uniqueSuffix + path.extname(file.originalname));
     }
@@ -35,18 +42,23 @@ const upload = multer({ storage: storage });
 // 1. CONEXÃO COM O BANCO DE DADOS NA NUVEM (NEON)
 // ==========================================
 const pool = new Pool({
-    // A chave mestra que você criou
     connectionString: 'postgresql://neondb_owner:npg_w2HdxUFe0EXA@ep-crimson-violet-amb5wph0.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require'
 });
 
-// ATUALIZAÇÃO DA TABELA PARA SUPORTAR O KANBAN E O DELIVERY
+// ATUALIZAÇÃO DA TABELA (Limpo de erros e unificado!)
 pool.query(`
     ALTER TABLE vendas ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'Concluída';
     ALTER TABLE vendas ADD COLUMN IF NOT EXISTS produto_nome VARCHAR(255) DEFAULT 'Pedido Diversos';
     ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cliente_nome VARCHAR(100);
     ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cliente_telefone VARCHAR(20);
     ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cliente_endereco TEXT;
-`).then(() => console.log("📦 Tabela de vendas blindada com Dados do Cliente!")).catch(console.error);
+    ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_url TEXT;
+`).then(() => console.log("📦 Tabelas blindadas e prontas para fotos!")).catch(console.error);
+
+// Teste de conexão logo ao ligar a chave
+pool.connect()
+    .then(() => console.log('☁️ Banco de Dados PostgreSQL Conectado com Sucesso!'))
+    .catch(err => console.error('❌ Erro ao conectar no banco:', err));
 
 // Teste de conexão logo ao ligar a chave
 pool.connect()
