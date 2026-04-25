@@ -104,6 +104,21 @@ app.post('/api/vendas', async (req, res) => {
     }
 });
 
+// ROTA PARA RECEBER O UPLOAD DA FOTO DO PAINEL
+app.post('/api/upload', upload.single('imagem'), (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ sucesso: false, erro: "Nenhuma imagem foi enviada." });
+        }
+        // O servidor devolve o caminho da foto salva (Ex: /uploads/171404000-7492.jpg)
+        const urlImagem = `/uploads/${req.file.filename}`;
+        res.json({ sucesso: true, url: urlImagem });
+    } catch (erro) {
+        console.error("Erro no upload:", erro);
+        res.status(500).json({ sucesso: false, erro: "Erro ao salvar a imagem." });
+    }
+});
+
 // ==========================================
 // KANBAN: ATUALIZAR STATUS DO PEDIDO
 // ==========================================
