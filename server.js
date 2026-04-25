@@ -10,6 +10,27 @@ const app = express();
 app.use(cors()); 
 app.use(express.json());
 
+// Libera o acesso público para as fotos do cardápio
+app.use('/uploads', express.static('/app/uploads'));
+
+// Configuração do Motor de Uploads (Multer)
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        const dir = '/app/uploads';
+        // Se a pasta não existir por algum motivo, ele cria na hora
+        if (!fs.existsSync(dir)){
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        cb(null, dir);
+    },
+    filename: function (req, file, cb) {
+        // Cria um nome único para a foto (Ex: 171404000-7492.jpg) para não dar conflito
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, uniqueSuffix + path.extname(file.originalname));
+    }
+});
+const upload = multer({ storage: storage });
+
 // ==========================================
 // 1. CONEXÃO COM O BANCO DE DADOS NA NUVEM (NEON)
 // ==========================================
