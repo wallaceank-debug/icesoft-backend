@@ -2,6 +2,9 @@
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg'); // ⬅️ O novo "motorista" do Banco de Dados
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 app.use(cors()); 
