@@ -110,7 +110,7 @@ app.post('/api/upload', upload.single('imagem'), (req, res) => {
 // DEMAIS ROTAS DA API
 // ==========================================
 
-app.get('/status', (req, res) => {
+app.get('/api/status', (req, res) => {
     res.json({ mensagem: "✅ Motor da Icesoft rodando perfeitamente nas Nuvens!" });
 });
 
