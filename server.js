@@ -21,17 +21,19 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// 3. Libera o acesso público para as fotos do cardápio
-app.use('/uploads', express.static('/app/uploads'));
+// 3 e 4. Configuração de Pastas e Motor de Uploads
+const pastaUploads = path.join(__dirname, 'uploads');
 
-// 4. Configuração do Motor de Uploads (Multer)
+// Libera o acesso público para as fotos do cardápio
+app.use('/uploads', express.static(pastaUploads));
+
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        const dir = '/app/uploads';
-        if (!fs.existsSync(dir)){
-            fs.mkdirSync(dir, { recursive: true });
+        // Agora ele cria a pasta exatamente onde o arquivo server.js estiver morando!
+        if (!fs.existsSync(pastaUploads)){
+            fs.mkdirSync(pastaUploads, { recursive: true });
         }
-        cb(null, dir);
+        cb(null, pastaUploads);
     },
     filename: function (req, file, cb) {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
