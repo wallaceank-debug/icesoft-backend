@@ -47,20 +47,44 @@ const pool = new Pool({
     connectionString: 'postgresql://neondb_owner:npg_w2HdxUFe0EXA@ep-crimson-violet-amb5wph0.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require'
 });
 
-// Teste de conexão e criação de colunas
+// Teste de conexão e criação de TODAS as tabelas vitais
 pool.connect()
     .then(() => {
-        console.log('☁️ Banco de Dados PostgreSQL Conectado com Sucesso!');
+        console.log('☁️ Banco de Dados PostgreSQL Conectado!');
         return pool.query(`
-            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'Concluída';
-            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS produto_nome VARCHAR(255) DEFAULT 'Pedido Diversos';
-            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cliente_nome VARCHAR(100);
-            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cliente_telefone VARCHAR(20);
-            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cliente_endereco TEXT;
+            -- 1. Tabela de Vendas (Kanban)
+            CREATE TABLE IF NOT EXISTS vendas (
+                id SERIAL PRIMARY KEY,
+                produto_nome VARCHAR(255) DEFAULT 'Pedido Diversos',
+                valor_total DECIMAL(10,2),
+                forma_pagamento VARCHAR(50),
+                itens JSONB DEFAULT '[]',
+                data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                status VARCHAR(50) DEFAULT 'Concluída',
+                cliente_nome VARCHAR(100),
+                cliente_telefone VARCHAR(20),
+                cliente_endereco TEXT
+            );
+            
+            -- 2. Tabela de Configurações (Cores e Status da Loja)
+            CREATE TABLE IF NOT EXISTS configuracoes (
+                chave VARCHAR(50) PRIMARY KEY,
+                valor TEXT NOT NULL
+            );
+            INSERT INTO configuracoes (chave, valor) VALUES ('status_delivery', 'aberto') ON CONFLICT (chave) DO NOTHING;
+
+            -- 3. Tabela de Bairros e Taxas
+            CREATE TABLE IF NOT EXISTS bairros (
+                id SERIAL PRIMARY KEY,
+                nome VARCHAR(100) NOT NULL,
+                taxa DECIMAL(10,2) NOT NULL DEFAULT 0.00
+            );
+            
+            -- 4. Garantia da foto no Produto
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_url TEXT;
         `);
     })
-    .then(() => console.log("📦 Tabelas blindadas e prontas para receber fotos!"))
+    .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
     .catch(err => console.error('❌ Erro no banco:', err));
 
 
