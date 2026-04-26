@@ -1,7 +1,7 @@
 {
   "name": "icesoft-backend",
-  "version": "1.0.0",
-  "description": "Motor central do sistema Icesoft",
+  "version": "2.0.0",
+  "description": "Motor central do sistema Icesoft - Versao Blindada",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
