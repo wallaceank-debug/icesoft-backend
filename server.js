@@ -62,6 +62,7 @@ pool.connect()
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS origem VARCHAR(50) DEFAULT 'Balcão';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_url TEXT;
             ALTER TABLE grupos_adicionais ADD COLUMN IF NOT EXISTS obrigatorio BOOLEAN DEFAULT false;
+            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS observacoes TEXT;
         `);
     })
     .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
@@ -102,14 +103,14 @@ app.get('/api/vendas', async (req, res) => {
 
 app.post('/api/vendas', async (req, res) => { 
     try { 
-        const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem } = req.body;
+        const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes } = req.body;
         const valorFinal = valor_total || total || 0;
         const origemFinal = origem || 'Balcão';
         
         await pool.query(
-            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, 
-            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal]
+            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, 
+            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '']
         ); 
         res.status(201).json({ sucesso: true }); 
     } catch (e) { 
