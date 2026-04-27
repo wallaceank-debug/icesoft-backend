@@ -205,6 +205,28 @@ app.get('/api/loja/status', async (req, res) => { try { res.json({ status: (awai
 app.put('/api/loja/status', async (req, res) => { try { await pool.query("UPDATE configuracoes SET valor = $1 WHERE chave = 'status_delivery'", [req.body.status]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.get('/api/configuracoes', async (req, res) => { try { const configs = {}; (await pool.query("SELECT * FROM configuracoes")).rows.forEach(r => configs[r.chave] = r.valor); res.json(configs); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
+app.put('/api/configuracoes', async (req, res) => {
+    try {
+        // Pega todas as configurações que o painel enviou (ex: nome_loja, cor, banner)
+        const chaves = Object.keys(req.body);
+        
+        for (let chave of chaves) {
+            let valor = String(req.body[chave]); // Transforma tudo em texto para o banco aceitar
+            
+            // Tenta inserir a nova configuração. Se a gaveta (chave) já existir, ele só atualiza o valor!
+            await pool.query(
+                `INSERT INTO configuracoes (chave, valor) VALUES ($1, $2)
+                 ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor`,
+                [chave, valor]
+            );
+        }
+        res.json({ sucesso: true });
+    } catch (e) {
+        console.error("Erro ao salvar configurações:", e);
+        res.status(500).json({ erro: "Erro ao salvar configuracoes" });
+    }
+});
+
 // Iniciando Servidor
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
