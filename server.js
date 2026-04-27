@@ -61,6 +61,7 @@ pool.connect()
             );
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS origem VARCHAR(50) DEFAULT 'Balcão';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_url TEXT;
+            ALTER TABLE grupos_adicionais ADD COLUMN IF NOT EXISTS obrigatorio BOOLEAN DEFAULT false;
         `);
     })
     .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
