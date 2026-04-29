@@ -198,6 +198,20 @@ app.get('/api/categorias', async (req, res) => { try { res.json((await pool.quer
 app.post('/api/categorias', async (req, res) => { try { res.json({ sucesso: true, categoria: (await pool.query('INSERT INTO categorias (nome, ordem) VALUES ($1, $2) RETURNING *', [req.body.nome, req.body.ordem || 0])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.delete('/api/categorias/:id', async (req, res) => { try { await pool.query('DELETE FROM categorias WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
+// Rota para salvar a reordenação (Drag and Drop)
+app.put('/api/categorias/ordem', async (req, res) => {
+    try {
+        const categorias = req.body; // Recebe a lista com a nova ordem
+        // Salva a nova ordem de cada categoria no banco
+        for (let cat of categorias) {
+            await pool.query('UPDATE categorias SET ordem = $1 WHERE id = $2', [cat.ordem, cat.id]);
+        }
+        res.json({ sucesso: true });
+    } catch (e) { 
+        res.status(500).json({erro: "Erro ao atualizar a ordem das categorias"}); 
+    }
+});
+
 app.get('/api/bairros', async (req, res) => { try { res.json((await pool.query('SELECT * FROM bairros ORDER BY nome ASC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.post('/api/bairros', async (req, res) => { try { res.json((await pool.query('INSERT INTO bairros (nome, taxa) VALUES ($1, $2) RETURNING *', [req.body.nome, req.body.taxa])).rows[0]); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.delete('/api/bairros/:id', async (req, res) => { try { await pool.query('DELETE FROM bairros WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
