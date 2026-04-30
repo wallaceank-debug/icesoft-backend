@@ -259,6 +259,35 @@ app.put('/api/configuracoes', async (req, res) => {
     }
 });
 
+// ==========================================
+// MÓDULO CRM E FIDELIDADE (CÉREBRO)
+// ==========================================
+app.get('/api/crm/clientes', async (req, res) => {
+    try {
+        // A mágica do SQL: Agrupa as vendas pelo telefone do cliente (ignorando vendas canceladas ou sem telefone)
+        const querySql = `
+            SELECT 
+                cliente_telefone AS telefone,
+                MAX(cliente_nome) AS nome,
+                COUNT(*) AS total_pedidos,
+                SUM(valor_total) AS total_gasto,
+                MAX(data_hora) AS ultima_compra
+            FROM vendas
+            WHERE cliente_telefone IS NOT NULL 
+              AND TRIM(cliente_telefone) != '' 
+              AND status != 'Cancelada'
+            GROUP BY cliente_telefone
+            ORDER BY ultima_compra DESC
+        `;
+        
+        const resultado = await pool.query(querySql);
+        res.json(resultado.rows);
+    } catch (erro) {
+        console.error("Erro ao gerar lista do CRM:", erro);
+        res.status(500).json({ erro: "Erro ao carregar dados do CRM" });
+    }
+});
+
 // Iniciando Servidor
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
