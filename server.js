@@ -44,6 +44,7 @@ app.post('/api/upload', upload.single('imagem'), async (req, res) => {
 
         // 🪄 A MÁGICA DA COMPRESSÃO ACONTECE AQUI
         await sharp(req.file.buffer)
+            .rotate() // 🚀 CORREÇÃO: Lê o EXIF do celular e desvira a foto automaticamente!
             .resize({ 
                 width: 600, 
                 height: 600, 
