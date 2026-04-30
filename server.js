@@ -7,6 +7,7 @@ const { Pool } = require('pg');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const sharp = require('sharp'); // 🚀 NOVO: O nosso triturador e compressor de imagens!
 
 const app = express();
 
@@ -22,17 +23,42 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 const pastaUploads = path.join(__dirname, 'uploads');
 app.use('/uploads', express.static(pastaUploads));
 
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
+// 🚀 NOVO SISTEMA DE UPLOAD COM COMPRESSÃO (SHARP)
+// Em vez de salvar no HD direto, seguramos a foto na memória RAM rapidinho
+const storage = multer.memoryStorage(); 
+const upload = multer({ storage: storage });
+
+// ==========================================
+// ROTA MÁGICA DE UPLOAD E COMPRESSÃO
+// ==========================================
+app.post('/api/upload', upload.single('imagem'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ sucesso: false, erro: "Nenhuma imagem foi enviada." });
+
+        // Cria o nome único do arquivo, mas agora SEMPRE forçando o formato final ser .webp
+        const nomeArquivo = Date.now() + '-' + Math.round(Math.random() * 1E9) + '.webp';
+        const caminhoFinal = path.join(pastaUploads, nomeArquivo);
+
+        // Garante que a pasta 'uploads' existe antes de tentar salvar algo lá
         if (!fs.existsSync(pastaUploads)){ fs.mkdirSync(pastaUploads, { recursive: true }); }
-        cb(null, pastaUploads);
-    },
-    filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + path.extname(file.originalname));
+
+        // 🪄 A MÁGICA DA COMPRESSÃO ACONTECE AQUI
+        await sharp(req.file.buffer)
+            .resize({ 
+                width: 600, 
+                height: 600, 
+                fit: 'inside', // Garante que a imagem caiba numa caixa 600x600 sem cortar pedaços
+                withoutEnlargement: true // Se a foto original for pequenininha (ex: 200px), ele não estica pra não perder qualidade
+            }) 
+            .webp({ quality: 80 }) // Converte para formato WebP retendo 80% da qualidade visual (perfeito para telas)
+            .toFile(caminhoFinal); // Após processar na RAM, joga o arquivo levinho pro HD do servidor
+
+        res.json({ sucesso: true, url: `/uploads/${nomeArquivo}` });
+    } catch (erro) { 
+        console.error("Erro na compressão de imagem:", erro);
+        res.status(500).json({ sucesso: false, erro: "Erro ao comprimir e salvar a imagem." }); 
     }
 });
-const upload = multer({ storage: storage });
 
 // ==========================================
 // CONEXÃO COM O BANCO DE DADOS NA NUVEM (NEON)
@@ -68,15 +94,6 @@ pool.connect()
     .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
     .catch(err => console.error('❌ Erro no banco:', err));
 
-// ==========================================
-// ROTA MÁGICA DE UPLOAD
-// ==========================================
-app.post('/api/upload', upload.single('imagem'), (req, res) => {
-    try {
-        if (!req.file) return res.status(400).json({ sucesso: false, erro: "Nenhuma imagem foi enviada." });
-        res.json({ sucesso: true, url: `/uploads/${req.file.filename}` });
-    } catch (erro) { res.status(500).json({ sucesso: false, erro: "Erro ao salvar a imagem." }); }
-});
 
 // ==========================================
 // ROTA DE VENDAS (ATUALIZADA COM FILTRO DE DATA!)
@@ -201,8 +218,7 @@ app.delete('/api/categorias/:id', async (req, res) => { try { await pool.query('
 // Rota para salvar a reordenação (Drag and Drop)
 app.put('/api/categorias/ordem', async (req, res) => {
     try {
-        const categorias = req.body; // Recebe a lista com a nova ordem
-        // Salva a nova ordem de cada categoria no banco
+        const categorias = req.body; 
         for (let cat of categorias) {
             await pool.query('UPDATE categorias SET ordem = $1 WHERE id = $2', [cat.ordem, cat.id]);
         }
