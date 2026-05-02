@@ -229,6 +229,17 @@ app.post('/api/categorias', async (req, res) => {
 });
 app.delete('/api/categorias/:id', async (req, res) => { try { await pool.query('DELETE FROM categorias WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
+// 🎚️ NOVA ROTA: Atualiza a visibilidade da categoria no Cardápio App
+app.put('/api/categorias/:id', async (req, res) => { 
+    try { 
+        const mostrar = req.body.mostrar_cardapio !== false;
+        await pool.query('UPDATE categorias SET mostrar_cardapio = $1 WHERE id = $2', [mostrar, req.params.id]); 
+        res.json({ sucesso: true }); 
+    } catch (e) { 
+        res.status(500).json({erro:"Erro ao atualizar categoria"}); 
+    }
+});
+
 // Rota para salvar a reordenação (Drag and Drop)
 app.put('/api/categorias/ordem', async (req, res) => {
     try {
