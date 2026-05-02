@@ -219,7 +219,14 @@ app.delete('/api/grupos/:id', async (req, res) => { try { await pool.query('DELE
 app.put('/api/grupos/:id/status', async (req, res) => { try { await pool.query('UPDATE grupos_adicionais SET ativo = $1 WHERE id = $2', [req.body.ativo, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
 app.get('/api/categorias', async (req, res) => { try { res.json((await pool.query('SELECT * FROM categorias ORDER BY ordem ASC, id ASC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
-app.post('/api/categorias', async (req, res) => { try { res.json({ sucesso: true, categoria: (await pool.query('INSERT INTO categorias (nome, ordem) VALUES ($1, $2) RETURNING *', [req.body.nome, req.body.ordem || 0])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
+app.post('/api/categorias', async (req, res) => { 
+    try { 
+        const mostrar = req.body.mostrar_cardapio !== false; // Se vier vazio, é true
+        res.json({ sucesso: true, categoria: (await pool.query('INSERT INTO categorias (nome, ordem, mostrar_cardapio) VALUES ($1, $2, $3) RETURNING *', [req.body.nome, req.body.ordem || 0, mostrar])).rows[0] }); 
+    } catch (e) { 
+        res.status(500).json({erro:"Erro"}); 
+    }
+});
 app.delete('/api/categorias/:id', async (req, res) => { try { await pool.query('DELETE FROM categorias WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
 // Rota para salvar a reordenação (Drag and Drop)
