@@ -86,10 +86,16 @@ pool.connect()
                 id SERIAL PRIMARY KEY, numero VARCHAR(10) NOT NULL, itens JSONB DEFAULT '[]',
                 status VARCHAR(20) DEFAULT 'Ocupada', data_abertura TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS categorias (
+                id SERIAL PRIMARY KEY, nome TEXT, ordem INTEGER
+            );
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS origem VARCHAR(50) DEFAULT 'Balcão';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_url TEXT;
             ALTER TABLE grupos_adicionais ADD COLUMN IF NOT EXISTS obrigatorio BOOLEAN DEFAULT false;
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS observacoes TEXT;
+            
+            -- 🚀 NOVO: Adiciona a coluna mostrar_cardapio na tabela categorias
+            ALTER TABLE categorias ADD COLUMN IF NOT EXISTS mostrar_cardapio BOOLEAN DEFAULT true;
         `);
     })
     .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
