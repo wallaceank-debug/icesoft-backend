@@ -216,7 +216,14 @@ app.post('/api/produtos', async (req, res) => {
         )).rows[0] }); 
     } catch (e) { res.status(500).json({erro:"Erro"}); }
 });
-app.put('/api/produtos/:id', async (req, res) => { try { res.json({ sucesso: true, produto: (await pool.query('UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7 WHERE id = $8 RETURNING *', [req.body.nome, req.body.descricao, req.body.preco, req.body.emoji, req.body.categoria || 'Outros', req.body.grupos_ids || [], req.body.imagem_url, req.params.id])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
+app.put('/api/produtos/:id', async (req, res) => { 
+    try { 
+        res.json({ sucesso: true, produto: (await pool.query(
+            'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7, venda_por_peso = $8 WHERE id = $9 RETURNING *', 
+            [req.body.nome, req.body.descricao, req.body.preco, req.body.emoji, req.body.categoria || 'Outros', req.body.grupos_ids || [], req.body.imagem_url, req.body.venda_por_peso || false, req.params.id]
+        )).rows[0] }); 
+    } catch (e) { res.status(500).json({erro:"Erro"}); }
+});
 app.delete('/api/produtos/:id', async (req, res) => { try { await pool.query('DELETE FROM produtos WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/produtos/:id/status', async (req, res) => { try { await pool.query('UPDATE produtos SET ativo = $1 WHERE id = $2', [req.body.ativo, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
