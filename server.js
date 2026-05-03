@@ -94,6 +94,7 @@ pool.connect()
             ALTER TABLE grupos_adicionais ADD COLUMN IF NOT EXISTS obrigatorio BOOLEAN DEFAULT false;
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS observacoes TEXT;
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_peso BOOLEAN DEFAULT false;
+            ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tag VARCHAR(50);
             
             -- 🚀 NOVO: Adiciona a coluna mostrar_cardapio na tabela categorias
             ALTER TABLE categorias ADD COLUMN IF NOT EXISTS mostrar_cardapio BOOLEAN DEFAULT true;
