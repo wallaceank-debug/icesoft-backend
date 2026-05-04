@@ -328,6 +328,65 @@ app.get('/api/crm/clientes', async (req, res) => {
     }
 });
 
+// ==========================================
+// 🤖 ROTAS DE INTEGRAÇÃO DO WHATSAPP
+// ==========================================
+app.get('/api/whatsapp/qrcode', async (req, res) => {
+    try {
+        const { rows } = await pool.query('SELECT * FROM configuracoes LIMIT 1');
+        const config = rows[0];
+
+        if (!config || !config.zap_url || !config.zap_key || !config.zap_instancia) {
+            return res.status(400).json({ erro: "WhatsApp não configurado no painel." });
+        }
+
+        const url = config.zap_url;
+        const key = config.zap_key;
+        const instancia = config.zap_instancia;
+
+        const headers = {
+            'apikey': key,
+            'Content-Type': 'application/json'
+        };
+
+        // 1. Pergunta para a Evolution API: "Essa instância existe?"
+        const resStatus = await fetch(`${url}/instance/connectionState/${instancia}`, { headers });
+        
+        // 2. Se ela não existir (Erro 404), a gente manda criar na mesma hora!
+        if (resStatus.status === 404) {
+            await fetch(`${url}/instance/create`, {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({
+                    instanceName: instancia,
+                    integration: "WHATSAPP-BAILEYS"
+                })
+            });
+        } else {
+            // Se ela já existir, a gente vê se já não está conectada
+            const dataStatus = await resStatus.json();
+            const estado = dataStatus.instance?.state || dataStatus.state;
+            if (estado === 'open') {
+                return res.json({ status: 'CONECTADO', mensagem: 'O WhatsApp já está conectado!' });
+            }
+        }
+
+        // 3. Pede o QR Code para conectar o celular
+        const resQr = await fetch(`${url}/instance/connect/${instancia}`, { headers });
+        const dataQr = await resQr.json();
+
+        if (dataQr.base64) {
+            return res.json({ status: 'QRCODE', qrcode: dataQr.base64 });
+        } else {
+            return res.json({ status: 'AGUARDANDO', mensagem: 'Tentando gerar QR Code...' });
+        }
+
+    } catch (e) {
+        console.error("Erro na API do Zap:", e);
+        res.status(500).json({ erro: "Falha de comunicação com a Evolution API." });
+    }
+});
+
 // Iniciando Servidor
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
