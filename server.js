@@ -284,18 +284,44 @@ app.get('/api/produtos', async (req, res) => { try { res.json((await pool.query(
 app.post('/api/produtos', async (req, res) => { 
     try { 
         res.json({ sucesso: true, produto: (await pool.query(
-            'INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, tag) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *', 
-            [req.body.nome, req.body.descricao, req.body.preco, req.body.emoji, req.body.categoria || 'Outros', req.body.grupos_ids || [], req.body.imagem_url, req.body.venda_por_peso || false, req.body.tag || '']
+            'INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, tag, tipo_promocao, valor_promocao) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *', 
+            [
+                req.body.nome, 
+                req.body.descricao, 
+                req.body.preco, 
+                req.body.emoji, 
+                req.body.categoria || 'Outros', 
+                req.body.grupos_ids || [], 
+                req.body.imagem_url, 
+                req.body.venda_por_peso || false, 
+                req.body.tag || '',
+                req.body.tipo_promocao || 'nenhuma', // 👈 NOVA GAVETA
+                req.body.valor_promocao || 0         // 👈 NOVA GAVETA
+            ]
         )).rows[0] }); 
-    } catch (e) { res.status(500).json({erro:"Erro"}); }
+    } catch (e) { res.status(500).json({erro:"Erro ao salvar produto"}); }
 });
+
 app.put('/api/produtos/:id', async (req, res) => { 
     try { 
         res.json({ sucesso: true, produto: (await pool.query(
-            'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7, venda_por_peso = $8, tag = $9 WHERE id = $10 RETURNING *', 
-            [req.body.nome, req.body.descricao, req.body.preco, req.body.emoji, req.body.categoria || 'Outros', req.body.grupos_ids || [], req.body.imagem_url, req.body.venda_por_peso || false, req.body.tag || '', req.params.id]
+            'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7, venda_por_peso = $8, tag = $9, tipo_promocao = $10, valor_promocao = $11 WHERE id = $12 RETURNING *', 
+            [
+                req.body.nome, 
+                req.body.descricao, 
+                req.body.preco, 
+                req.body.emoji, 
+                req.body.categoria || 'Outros', 
+                req.body.grupos_ids || [], 
+                req.body.imagem_url, 
+                req.body.venda_por_peso || false, 
+                req.body.tag || '',
+                req.body.tipo_promocao || 'nenhuma', // 👈 NOVA GAVETA
+                req.body.valor_promocao || 0,        // 👈 NOVA GAVETA
+                req.params.id
+            ]
         )).rows[0] }); 
-    } catch (e) { res.status(500).json({erro:"Erro"}); }
+    } catch (e) { res.status(500).json({erro:"Erro ao atualizar produto"}); }
 });
 app.delete('/api/produtos/:id', async (req, res) => { try { await pool.query('DELETE FROM produtos WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/produtos/:id/status', async (req, res) => { try { await pool.query('UPDATE produtos SET ativo = $1 WHERE id = $2', [req.body.ativo, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
