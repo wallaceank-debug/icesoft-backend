@@ -95,6 +95,12 @@ pool.connect()
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS observacoes TEXT;
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_peso BOOLEAN DEFAULT false;
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tag VARCHAR(50);
+            -- 🚀 NOVO: Adiciona as colunas de promoção na tabela de produtos
+            ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_promocao VARCHAR(50) DEFAULT 'nenhuma';
+            ALTER TABLE produtos ADD COLUMN IF NOT EXISTS valor_promocao DECIMAL(10,2) DEFAULT 0;
+            
+            -- 🚀 NOVO: Adiciona a coluna mostrar_cardapio na tabela categorias
+            ALTER TABLE categorias ADD COLUMN IF NOT EXISTS mostrar_cardapio BOOLEAN DEFAULT true;
             
             -- 🚀 NOVO: Adiciona a coluna mostrar_cardapio na tabela categorias
             ALTER TABLE categorias ADD COLUMN IF NOT EXISTS mostrar_cardapio BOOLEAN DEFAULT true;
