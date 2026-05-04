@@ -329,6 +329,60 @@ app.get('/api/crm/clientes', async (req, res) => {
 });
 
 // ==========================================
+// ⚙️ ROTAS DE CONFIGURAÇÕES (WHATSAPP E MENSAGENS)
+// ==========================================
+
+// 1. Cria a tabela no banco de dados automaticamente se ela não existir
+pool.query(`
+    CREATE TABLE IF NOT EXISTS configuracoes (
+        id SERIAL PRIMARY KEY,
+        zap_url TEXT,
+        zap_key TEXT,
+        zap_instancia TEXT,
+        msg_boas_vindas TEXT,
+        msg_aceito TEXT,
+        msg_entrega TEXT,
+        msg_concluido TEXT
+    );
+`).then(async () => {
+    // Garante que exista pelo menos uma linha para o sistema poder editar depois
+    const { rowCount } = await pool.query('SELECT * FROM configuracoes');
+    if (rowCount === 0) {
+        await pool.query('INSERT INTO configuracoes (zap_instancia) VALUES ($1)', ['IcesoftBot']);
+    }
+}).catch(console.error);
+
+// 2. Rota para LER as configurações (quando você abre a tela)
+app.get('/api/configuracoes', async (req, res) => {
+    try {
+        const { rows } = await pool.query('SELECT * FROM configuracoes LIMIT 1');
+        res.json(rows[0] || {});
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao buscar configurações" });
+    }
+});
+
+// 3. Rota para SALVAR as configurações (quando você clica nos botões azuis ou verdes)
+app.put('/api/configuracoes', async (req, res) => {
+    try {
+        const dados = req.body;
+        const chaves = Object.keys(dados);
+        
+        if (chaves.length === 0) return res.json({ sucesso: true });
+
+        // Monta a atualização de forma dinâmica para salvar só o que foi enviado
+        let querySet = chaves.map((chave, index) => `${chave} = $${index + 1}`).join(', ');
+        let valores = Object.values(dados);
+
+        await pool.query(`UPDATE configuracoes SET ${querySet} WHERE id = (SELECT id FROM configuracoes LIMIT 1)`, valores);
+        res.json({ sucesso: true });
+    } catch (e) {
+        console.error("Erro ao salvar config:", e);
+        res.status(500).json({ erro: "Erro ao salvar configurações" });
+    }
+});
+
+// ==========================================
 // 🤖 ROTAS DE INTEGRAÇÃO DO WHATSAPP
 // ==========================================
 app.get('/api/whatsapp/qrcode', async (req, res) => {
