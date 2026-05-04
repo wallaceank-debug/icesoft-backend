@@ -144,11 +144,77 @@ app.post('/api/vendas', async (req, res) => {
     }
 });
 
+// ==========================================
+// ROTA DE MUDANÇA DE STATUS + DISPARO DE WHATSAPP
+// ==========================================
 app.put('/api/vendas/:id/status', async (req, res) => { 
     try { 
-        await pool.query("UPDATE vendas SET status = $1 WHERE id = $2", [req.body.status, req.params.id]); 
-        res.json({ sucesso: true }); 
-    } catch (e) { res.status(500).json({erro:"Erro"}); }
+        const novoStatus = req.body.status;
+        const idVenda = req.params.id;
+
+        // 1. Atualiza o status no Banco de Dados
+        await pool.query("UPDATE vendas SET status = $1 WHERE id = $2", [novoStatus, idVenda]); 
+        res.json({ sucesso: true }); // Libera a tela do Kanban rapidamente
+
+        // 2. 🤖 INÍCIO DA AUTOMAÇÃO DO ROBÔ DE MENSAGENS 🤖
+        // Busca os dados da venda para saber o telefone e nome do cliente
+        const vendaQuery = await pool.query("SELECT * FROM vendas WHERE id = $1", [idVenda]);
+        const venda = vendaQuery.rows[0];
+
+        // Só tenta enviar se for um pedido de Delivery com telefone preenchido
+        if (venda && venda.cliente_telefone && venda.cliente_telefone.trim() !== '') {
+            
+            // Busca os textos que você salvou na tela de Integrações
+            const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
+            const config = configQuery.rows[0];
+
+            if (config && config.zap_url && config.zap_key && config.zap_instancia) {
+                let textoMensagem = null;
+
+                // 3. Escolhe a gaveta certa dependendo da coluna do Kanban
+                if (novoStatus === 'A Preparar' && config.msg_aceito) {
+                    textoMensagem = config.msg_aceito;
+                } else if (novoStatus === 'Saiu p/ Entrega' && config.msg_entrega) {
+                    textoMensagem = config.msg_entrega;
+                } else if (novoStatus === 'Entregue' && config.msg_concluido) {
+                    textoMensagem = config.msg_concluido;
+                }
+
+                if (textoMensagem) {
+                    // 4. Limpeza e Formatação Mágica
+                    // Pega só o primeiro nome do cliente
+                    const primeiroNome = venda.cliente_nome ? venda.cliente_nome.split(' ')[0] : 'Cliente';
+                    
+                    // Troca as tags {nome} e {pedido} pelo nome real e número do pedido
+                    const textoPronto = textoMensagem
+                        .replace(/{nome}/g, primeiroNome)
+                        .replace(/{pedido}/g, venda.id);
+
+                    // Limpa o telefone (tira os parênteses e espaços) e adiciona o '55' do Brasil
+                    const telefoneLimpo = "55" + venda.cliente_telefone.replace(/\D/g, '');
+
+                    // 5. Manda a ordem de disparo para a Evolution API em background
+                    const url = config.zap_url.trim().replace(/\/$/, "");
+                    const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
+
+                    fetch(`${url}/message/sendText/${instanciaURL}`, {
+                        method: 'POST',
+                        headers: {
+                            'apikey': config.zap_key.trim(),
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            number: telefoneLimpo,
+                            text: textoPronto
+                        })
+                    }).catch(err => console.error("⚠️ Robô falhou ao enviar mensagem silenciosa:", err));
+                }
+            }
+        }
+        // FIM DA AUTOMAÇÃO
+    } catch (e) { 
+        console.error("Erro na rota de status:", e);
+    }
 });
 
 // ==========================================
