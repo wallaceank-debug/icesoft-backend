@@ -231,15 +231,61 @@ app.put('/api/vendas/:id/status', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     const { username, senha } = req.body;
     try {
-        const resultado = await pool.query('SELECT * FROM usuarios WHERE username = $1 AND senha = $2', [username, senha]);
+        // Tenta achar alguém com esse username e senha ou email e senha
+        const resultado = await pool.query(
+            'SELECT * FROM usuarios WHERE (username = $1 OR email = $1) AND senha = $2', 
+            [username, senha]
+        );
+        
         if (resultado.rows.length > 0) {
-            res.json({ sucesso: true, mensagem: "Login aprovado", token: "cracha-icesoft-aprovado", cargo: resultado.rows[0].cargo });
+            // Se achou, entrega o crachá com um token dinâmico
+            res.json({ 
+                sucesso: true, 
+                mensagem: "Login aprovado", 
+                token: "cracha-icesoft-aprovado-" + Date.now(), 
+                cargo: resultado.rows[0].cargo,
+                usuario_id: resultado.rows[0].id // Mandamos a ID para poder mudar a senha depois
+            });
         } else {
             res.status(401).json({ sucesso: false, erro: "Usuário ou senha incorretos!" });
         }
-    } catch (erro) { res.status(500).json({ erro: "Erro interno do servidor" }); }
+    } catch (erro) { 
+        console.error(erro);
+        res.status(500).json({ erro: "Erro interno do servidor" }); 
+    }
 });
 
+// A NOVA Rota para Mudar os Dados (Senha/Email)
+app.put('/api/usuarios/:id', async (req, res) => {
+    const userId = req.params.id;
+    const { novo_username, novo_email, nova_senha } = req.body;
+
+    try {
+        // Pega os dados atuais do usuário para não apagar o que ele não preencheu
+        const userAtual = await pool.query('SELECT * FROM usuarios WHERE id = $1', [userId]);
+        if (userAtual.rows.length === 0) return res.status(404).json({ erro: "Usuário não encontrado" });
+
+        const user = userAtual.rows[0];
+        
+        const usernameFinal = novo_username || user.username;
+        const emailFinal = novo_email || user.email;
+        const senhaFinal = nova_senha || user.senha; 
+
+        // Atualiza a tabela com as novas credenciais
+        await pool.query(
+            'UPDATE usuarios SET username = $1, email = $2, senha = $3 WHERE id = $4',
+            [usernameFinal, emailFinal, senhaFinal, userId]
+        );
+
+        res.json({ sucesso: true, mensagem: "Dados atualizados com sucesso!" });
+
+    } catch (erro) {
+        console.error("Erro ao atualizar usuário:", erro);
+        res.status(500).json({ erro: "Erro ao atualizar os dados." });
+    }
+});
+
+// A sua rota de Ranking mantida intacta
 app.get('/api/ranking', async (req, res) => {
     try {
         const querySql = `
