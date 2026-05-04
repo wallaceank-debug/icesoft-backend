@@ -383,31 +383,39 @@ app.put('/api/configuracoes', async (req, res) => {
 });
 
 // ==========================================
-// 🤖 ROTAS DE INTEGRAÇÃO DO WHATSAPP
+// 🤖 ROTAS DE INTEGRAÇÃO DO WHATSAPP (VERSÃO TURBINADA)
 // ==========================================
 app.get('/api/whatsapp/qrcode', async (req, res) => {
     try {
         const { rows } = await pool.query('SELECT * FROM configuracoes LIMIT 1');
         const config = rows[0];
 
+        // 🔍 DEBUG: Mostra no log do Easypanel o que ele achou no banco
+        console.log("🔍 Dados do Banco para o Zap:", config);
+
         if (!config || !config.zap_url || !config.zap_key || !config.zap_instancia) {
-            return res.status(400).json({ erro: "WhatsApp não configurado no painel." });
+            return res.status(400).json({ erro: "WhatsApp não configurado no painel. (Faltando URL, Key ou Instância no banco)" });
         }
 
-        const url = config.zap_url;
-        const key = config.zap_key;
-        const instancia = config.zap_instancia;
+        // 🛡️ BLINDAGEM: Tira a barra '/' do final do link e espaços em branco
+        const url = config.zap_url.trim().replace(/\/$/, ""); 
+        const key = config.zap_key.trim();
+        const instancia = config.zap_instancia.trim();
+
+        console.log("🔗 URL Limpa:", url);
+        console.log("🔑 Instância:", instancia);
 
         const headers = {
             'apikey': key,
             'Content-Type': 'application/json'
         };
 
-        // 1. Pergunta para a Evolution API: "Essa instância existe?"
+        // 1. Pergunta para a Evolution API se a instância existe
         const resStatus = await fetch(`${url}/instance/connectionState/${instancia}`, { headers });
-        
-        // 2. Se ela não existir (Erro 404), a gente manda criar na mesma hora!
+        console.log("📡 Status da Evolution:", resStatus.status);
+
         if (resStatus.status === 404) {
+            console.log("🛠️ Instância não existe. Criando agora...");
             await fetch(`${url}/instance/create`, {
                 method: 'POST',
                 headers: headers,
@@ -417,30 +425,33 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
                 })
             });
         } else {
-            // Se ela já existir, a gente vê se já não está conectada
             const dataStatus = await resStatus.json();
             const estado = dataStatus.instance?.state || dataStatus.state;
+            console.log("📊 Estado atual da Instância:", estado);
+            
             if (estado === 'open') {
                 return res.json({ status: 'CONECTADO', mensagem: 'O WhatsApp já está conectado!' });
             }
         }
 
-        // 3. Pede o QR Code para conectar o celular
+        // 3. Pede o QR Code
+        console.log("📱 Solicitando o QR Code...");
         const resQr = await fetch(`${url}/instance/connect/${instancia}`, { headers });
         const dataQr = await resQr.json();
 
         if (dataQr.base64) {
+            console.log("✅ QR Code gerado com sucesso!");
             return res.json({ status: 'QRCODE', qrcode: dataQr.base64 });
         } else {
-            return res.json({ status: 'AGUARDANDO', mensagem: 'Tentando gerar QR Code...' });
+            console.log("⏳ API não devolveu o QR Code ainda:", dataQr);
+            return res.json({ status: 'AGUARDANDO', mensagem: 'Tentando gerar QR Code. Tente de novo em 5 segundos.' });
         }
 
     } catch (e) {
-        console.error("Erro na API do Zap:", e);
-        res.status(500).json({ erro: "Falha de comunicação com a Evolution API." });
+        console.error("❌ Erro catastrófico na API do Zap:", e);
+        res.status(500).json({ erro: "Falha de comunicação com a Evolution API. (Verifique os logs no Easypanel)" });
     }
 });
-
 // Iniciando Servidor
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
