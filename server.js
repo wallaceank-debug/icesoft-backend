@@ -95,9 +95,13 @@ pool.connect()
                 id SERIAL PRIMARY KEY, 
                 username VARCHAR(100) UNIQUE, 
                 senha VARCHAR(100), 
-                email VARCHAR(255), 
                 cargo VARCHAR(50) DEFAULT 'admin'
             );
+
+            -- 🛡️ FORÇA a criação da coluna de e-mail caso a tabela seja velha
+            ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+
+            -- Agora sim, cria a chave mestra com total segurança
             INSERT INTO usuarios (username, senha, email, cargo) 
             VALUES ('admin', 'icesoft123', 'admin@icesoft.com', 'admin') 
             ON CONFLICT (username) DO NOTHING;
