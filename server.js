@@ -425,14 +425,20 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
         if (resStatus.status === 404) {
             console.log("🛠️ Instância não existe. Criando nova...");
             
-            // 4. Cria a instância e JÁ FORÇA a geração do QR Code no momento do nascimento (qrcode: true)
+            // 4. Cria a instância e JÁ FORÇA a geração do QR Code
             const resCreate = await fetch(`${url}/instance/create`, {
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify({
-                    instanceName: nomeInstanciaBruto, // No corpo da requisição vai o nome normal
+                    instanceName: nomeInstanciaBruto,
                     qrcode: true, 
-                    integration: "WHATSAPP-BAILEYS"
+                    integration: "WHATSAPP-BAILEYS",
+                    // 🛡️ BLINDAGEM DE SERVIDOR (Evita travamentos no Easypanel)
+                    reject_call: true,       // Ignora ligações de voz/vídeo no Zap
+                    groupsIgnore: true,      // Ignora processamento de Grupos (Poupa MUITA RAM)
+                    readMessages: false,     // Não marca mensagens como lidas automaticamente
+                    readStatus: false,       // Não baixa Status/Stories dos contatos
+                    syncFullHistory: false   // PROÍBE o download de histórico antigo (Alivia a CPU)
                 })
             });
             
