@@ -361,26 +361,36 @@ app.get('/api/configuracoes', async (req, res) => {
     }
 });
 
-// 3. Rota para SALVAR as configurações
+// 3. Rota para SALVAR as configurações (VERSÃO RAIO-X)
 app.put('/api/configuracoes', async (req, res) => {
+    console.log("📥 DADOS RECEBIDOS DO PAINEL PARA SALVAR:", req.body);
+    
     try {
         const dados = req.body;
-        const chaves = Object.keys(dados);
-        
-        if (chaves.length === 0) return res.json({ sucesso: true });
+        // Se a caixa vier vazia, a gente avisa no log!
+        if (!dados || Object.keys(dados).length === 0) {
+            console.log("⚠️ ALERTA: O painel não enviou nenhum dado (Corpo da requisição vazio)!");
+            return res.json({ sucesso: true }); 
+        }
 
-        const check = await pool.query('SELECT id FROM integracoes_config LIMIT 1');
+        // Garante que a linha existe no banco
+        const check = await pool.query('SELECT * FROM integracoes_config');
         if (check.rowCount === 0) {
             await pool.query('INSERT INTO integracoes_config (zap_instancia) VALUES ($1)', ['IcesoftBot']);
         }
 
+        // Monta os dados e atualiza (sem WHERE, para forçar a atualização da tabela toda)
+        const chaves = Object.keys(dados);
         let querySet = chaves.map((chave, index) => `${chave} = $${index + 1}`).join(', ');
         let valores = Object.values(dados);
 
-        await pool.query(`UPDATE integracoes_config SET ${querySet} WHERE id = (SELECT id FROM integracoes_config LIMIT 1)`, valores);
+        console.log("📝 INJETANDO NO BANCO:", querySet, "| VALORES:", valores);
+        await pool.query(`UPDATE integracoes_config SET ${querySet}`, valores);
+        
+        console.log("✅ BANCO ATUALIZADO COM SUCESSO!");
         res.json({ sucesso: true });
     } catch (e) {
-        console.error("Erro ao salvar config:", e);
+        console.error("❌ Erro ao salvar config:", e);
         res.status(500).json({ erro: "Erro ao salvar configurações" });
     }
 });
