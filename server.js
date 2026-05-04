@@ -104,6 +104,8 @@ pool.connect()
             
             -- 🚀 NOVO: Adiciona a coluna mostrar_cardapio na tabela categorias
             ALTER TABLE categorias ADD COLUMN IF NOT EXISTS mostrar_cardapio BOOLEAN DEFAULT true;
+
+            ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email VARCHAR(255);
         `);
     })
     .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
