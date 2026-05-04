@@ -89,23 +89,31 @@ pool.connect()
             CREATE TABLE IF NOT EXISTS categorias (
                 id SERIAL PRIMARY KEY, nome TEXT, ordem INTEGER
             );
+
+            -- 🚀 NOVO: Tabela de Usuários e Chave Mestra
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id SERIAL PRIMARY KEY, 
+                username VARCHAR(100) UNIQUE, 
+                senha VARCHAR(100), 
+                email VARCHAR(255), 
+                cargo VARCHAR(50) DEFAULT 'admin'
+            );
+            INSERT INTO usuarios (username, senha, email, cargo) 
+            VALUES ('admin', 'icesoft123', 'admin@icesoft.com', 'admin') 
+            ON CONFLICT (username) DO NOTHING;
+
+            -- Alterações de atualização para tabelas existentes
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS origem VARCHAR(50) DEFAULT 'Balcão';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_url TEXT;
             ALTER TABLE grupos_adicionais ADD COLUMN IF NOT EXISTS obrigatorio BOOLEAN DEFAULT false;
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS observacoes TEXT;
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_peso BOOLEAN DEFAULT false;
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tag VARCHAR(50);
-            -- 🚀 NOVO: Adiciona as colunas de promoção na tabela de produtos
+            
+            -- 🚀 NOVO: Promoções e Visibilidade
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_promocao VARCHAR(50) DEFAULT 'nenhuma';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS valor_promocao DECIMAL(10,2) DEFAULT 0;
-            
-            -- 🚀 NOVO: Adiciona a coluna mostrar_cardapio na tabela categorias
             ALTER TABLE categorias ADD COLUMN IF NOT EXISTS mostrar_cardapio BOOLEAN DEFAULT true;
-            
-            -- 🚀 NOVO: Adiciona a coluna mostrar_cardapio na tabela categorias
-            ALTER TABLE categorias ADD COLUMN IF NOT EXISTS mostrar_cardapio BOOLEAN DEFAULT true;
-
-            ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email VARCHAR(255);
         `);
     })
     .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
