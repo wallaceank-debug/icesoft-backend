@@ -332,9 +332,9 @@ app.get('/api/crm/clientes', async (req, res) => {
 // ⚙️ ROTAS DE CONFIGURAÇÕES (WHATSAPP E MENSAGENS)
 // ==========================================
 
-// 1. Cria a tabela no banco de dados automaticamente se ela não existir
+// 1. Cria a NOVA tabela separada só para integrações
 pool.query(`
-    CREATE TABLE IF NOT EXISTS configuracoes (
+    CREATE TABLE IF NOT EXISTS integracoes_config (
         id SERIAL PRIMARY KEY,
         zap_url TEXT,
         zap_key TEXT,
@@ -345,24 +345,23 @@ pool.query(`
         msg_concluido TEXT
     );
 `).then(async () => {
-    // Garante que exista pelo menos uma linha para o sistema poder editar depois
-    const { rowCount } = await pool.query('SELECT * FROM configuracoes');
+    const { rowCount } = await pool.query('SELECT * FROM integracoes_config');
     if (rowCount === 0) {
-        await pool.query('INSERT INTO configuracoes (zap_instancia) VALUES ($1)', ['IcesoftBot']);
+        await pool.query('INSERT INTO integracoes_config (zap_instancia) VALUES ($1)', ['IcesoftBot']);
     }
 }).catch(console.error);
 
-// 2. Rota para LER as configurações (quando você abre a tela)
+// 2. Rota para LER as configurações
 app.get('/api/configuracoes', async (req, res) => {
     try {
-        const { rows } = await pool.query('SELECT * FROM configuracoes LIMIT 1');
+        const { rows } = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
         res.json(rows[0] || {});
     } catch (e) {
         res.status(500).json({ erro: "Erro ao buscar configurações" });
     }
 });
 
-// 3. Rota para SALVAR as configurações (quando você clica nos botões azuis ou verdes)
+// 3. Rota para SALVAR as configurações
 app.put('/api/configuracoes', async (req, res) => {
     try {
         const dados = req.body;
@@ -370,11 +369,15 @@ app.put('/api/configuracoes', async (req, res) => {
         
         if (chaves.length === 0) return res.json({ sucesso: true });
 
-        // Monta a atualização de forma dinâmica para salvar só o que foi enviado
+        const check = await pool.query('SELECT id FROM integracoes_config LIMIT 1');
+        if (check.rowCount === 0) {
+            await pool.query('INSERT INTO integracoes_config (zap_instancia) VALUES ($1)', ['IcesoftBot']);
+        }
+
         let querySet = chaves.map((chave, index) => `${chave} = $${index + 1}`).join(', ');
         let valores = Object.values(dados);
 
-        await pool.query(`UPDATE configuracoes SET ${querySet} WHERE id = (SELECT id FROM configuracoes LIMIT 1)`, valores);
+        await pool.query(`UPDATE integracoes_config SET ${querySet} WHERE id = (SELECT id FROM integracoes_config LIMIT 1)`, valores);
         res.json({ sucesso: true });
     } catch (e) {
         console.error("Erro ao salvar config:", e);
@@ -383,39 +386,32 @@ app.put('/api/configuracoes', async (req, res) => {
 });
 
 // ==========================================
-// 🤖 ROTAS DE INTEGRAÇÃO DO WHATSAPP (VERSÃO TURBINADA)
+// 🤖 ROTAS DE INTEGRAÇÃO DO WHATSAPP
 // ==========================================
 app.get('/api/whatsapp/qrcode', async (req, res) => {
     try {
-        const { rows } = await pool.query('SELECT * FROM configuracoes LIMIT 1');
+        // Agora busca na tabela certa!
+        const { rows } = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
         const config = rows[0];
 
-        // 🔍 DEBUG: Mostra no log do Easypanel o que ele achou no banco
-        console.log("🔍 Dados do Banco para o Zap:", config);
+        console.log("🔍 Dados Corrigidos para o Zap:", config);
 
         if (!config || !config.zap_url || !config.zap_key || !config.zap_instancia) {
-            return res.status(400).json({ erro: "WhatsApp não configurado no painel. (Faltando URL, Key ou Instância no banco)" });
+            return res.status(400).json({ erro: "WhatsApp não configurado no painel. (Salve os dados primeiro!)" });
         }
 
-        // 🛡️ BLINDAGEM: Tira a barra '/' do final do link e espaços em branco
         const url = config.zap_url.trim().replace(/\/$/, ""); 
         const key = config.zap_key.trim();
         const instancia = config.zap_instancia.trim();
-
-        console.log("🔗 URL Limpa:", url);
-        console.log("🔑 Instância:", instancia);
 
         const headers = {
             'apikey': key,
             'Content-Type': 'application/json'
         };
 
-        // 1. Pergunta para a Evolution API se a instância existe
         const resStatus = await fetch(`${url}/instance/connectionState/${instancia}`, { headers });
-        console.log("📡 Status da Evolution:", resStatus.status);
-
+        
         if (resStatus.status === 404) {
-            console.log("🛠️ Instância não existe. Criando agora...");
             await fetch(`${url}/instance/create`, {
                 method: 'POST',
                 headers: headers,
@@ -427,31 +423,26 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
         } else {
             const dataStatus = await resStatus.json();
             const estado = dataStatus.instance?.state || dataStatus.state;
-            console.log("📊 Estado atual da Instância:", estado);
-            
             if (estado === 'open') {
                 return res.json({ status: 'CONECTADO', mensagem: 'O WhatsApp já está conectado!' });
             }
         }
 
-        // 3. Pede o QR Code
-        console.log("📱 Solicitando o QR Code...");
         const resQr = await fetch(`${url}/instance/connect/${instancia}`, { headers });
         const dataQr = await resQr.json();
 
         if (dataQr.base64) {
-            console.log("✅ QR Code gerado com sucesso!");
             return res.json({ status: 'QRCODE', qrcode: dataQr.base64 });
         } else {
-            console.log("⏳ API não devolveu o QR Code ainda:", dataQr);
             return res.json({ status: 'AGUARDANDO', mensagem: 'Tentando gerar QR Code. Tente de novo em 5 segundos.' });
         }
 
     } catch (e) {
-        console.error("❌ Erro catastrófico na API do Zap:", e);
-        res.status(500).json({ erro: "Falha de comunicação com a Evolution API. (Verifique os logs no Easypanel)" });
+        console.error("❌ Erro na API do Zap:", e);
+        res.status(500).json({ erro: "Falha de comunicação com a Evolution API." });
     }
 });
+
 // Iniciando Servidor
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
