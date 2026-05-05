@@ -155,14 +155,15 @@ app.get('/api/vendas', async (req, res) => {
 
 app.post('/api/vendas', async (req, res) => { 
     try { 
-        const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes } = req.body;
+        // 🚀 NOVO: O motor agora extrai o transacao_id do pacote que o Cardápio envia
+        const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id } = req.body;
         const valorFinal = valor_total || total || 0;
         const origemFinal = origem || 'Balcão';
         
         await pool.query(
-            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, 
-            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '']
+            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, 
+            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null]
         ); 
         res.status(201).json({ sucesso: true }); 
     } catch (e) { 
