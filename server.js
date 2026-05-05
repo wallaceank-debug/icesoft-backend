@@ -661,6 +661,96 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
         res.status(500).json({ erro: "Falha de comunicação de rede. A URL da Evolution API está rodando no Easypanel?" });
     }
 });
+
+// ==========================================
+// 💸 INTEGRAÇÃO MERCADO PAGO (PIX DINÂMICO)
+// ==========================================
+
+// 1. O GERADOR: Comunica com o Mercado Pago e devolve o Copia e Cola
+app.post('/api/pagamento/pix', async (req, res) => {
+    try {
+        const { valor, cliente_nome, cliente_telefone } = req.body;
+
+        // Busca a sua chave secreta do MP no nosso banco de dados
+        const configQuery = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'");
+        const mpToken = configQuery.rows[0]?.valor;
+
+        if (!mpToken) return res.status(400).json({ erro: "Mercado Pago não configurado no painel." });
+
+        const idempotencyKey = "ICE-" + Date.now(); // Proteção contra cobrança duplicada
+
+        // Faz o pedido do Pix direto pro servidor do Mercado Pago
+        const mpResponse = await fetch('https://api.mercadopago.com/v1/payments', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${mpToken}`,
+                'X-Idempotency-Key': idempotencyKey,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                transaction_amount: Number(valor),
+                description: "Pedido Icesoft Delivery",
+                payment_method_id: "pix",
+                payer: {
+                    email: "delivery@icesoft.com.br", // O MP exige e-mail, usamos um genérico se o cliente não der
+                    first_name: cliente_nome || "Cliente"
+                }
+            })
+        });
+
+        const data = await mpResponse.json();
+
+        if (data.error || !data.point_of_interaction) {
+            console.error("Erro no Mercado Pago:", data);
+            return res.status(500).json({ erro: "Falha ao gerar o Pix. Verifique a chave de acesso." });
+        }
+
+        // Devolve o QR Code e o Copia-Cola para o celular do cliente!
+        res.json({
+            sucesso: true,
+            transacao_id: data.id,
+            qr_code_base64: data.point_of_interaction.transaction_data.qr_code_base64,
+            qr_code_copia_cola: data.point_of_interaction.transaction_data.qr_code
+        });
+
+    } catch (e) {
+        console.error("Erro Pix:", e);
+        res.status(500).json({ erro: "Erro interno ao gerar pagamento." });
+    }
+});
+
+// 2. O VIGIA (WEBHOOK): Fica escutando o Mercado Pago avisar que o cliente pagou
+app.post('/api/pagamento/webhook', async (req, res) => {
+    // Retornamos 200 rápido pro Mercado Pago não ficar travado
+    res.status(200).send("OK");
+
+    try {
+        const { type, data } = req.body;
+        
+        if (type === 'payment') {
+            const pagamentoId = data.id;
+
+            // Pega a chave para consultar a veracidade do pagamento
+            const configQuery = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'");
+            const mpToken = configQuery.rows[0]?.valor;
+
+            const mpResponse = await fetch(`https://api.mercadopago.com/v1/payments/${pagamentoId}`, {
+                headers: { 'Authorization': `Bearer ${mpToken}` }
+            });
+            const pgtoInfo = await mpResponse.json();
+
+            if (pgtoInfo.status === 'approved') {
+                // 🚀 PAGAMENTO CONFIRMADO!
+                // Muda o status da venda e avisa a produção
+                await pool.query("UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1", [pagamentoId.toString()]);
+                console.log(`✅ Pagamento Pix ${pagamentoId} APROVADO e baixado no sistema!`);
+            }
+        }
+    } catch (e) {
+        console.error("Erro no Webhook do Mercado Pago:", e);
+    }
+});
+
 // Iniciando Servidor
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
