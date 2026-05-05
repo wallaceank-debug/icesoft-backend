@@ -752,6 +752,33 @@ app.post('/api/pagamento/webhook', async (req, res) => {
     }
 });
 
+// 3. ROTA ATIVA (Bypass de Webhook): O Cardápio pergunta ativamente se foi pago
+app.get('/api/pagamento/pix/:id/status', async (req, res) => {
+    try {
+        const pagamentoId = req.params.id;
+        
+        // Pega a chave no cofre
+        const configQuery = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'");
+        const mpToken = configQuery.rows[0]?.valor;
+
+        // Bate na porta do Mercado Pago e pergunta o status do Pix
+        const mpResponse = await fetch(`https://api.mercadopago.com/v1/payments/${pagamentoId}`, {
+            headers: { 'Authorization': `Bearer ${mpToken}` }
+        });
+        const pgtoInfo = await mpResponse.json();
+
+        // Se o MP confirmar que está aprovado, nós mesmos damos a baixa!
+        if (pgtoInfo.status === 'approved') {
+            await pool.query("UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1", [pagamentoId.toString()]);
+            res.json({ pago: true });
+        } else {
+            res.json({ pago: false });
+        }
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao consultar Mercado Pago" });
+    }
+});
+
 // Iniciando Servidor
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
