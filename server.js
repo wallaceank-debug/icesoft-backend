@@ -184,14 +184,12 @@ app.put('/api/vendas/:id/status', async (req, res) => {
         res.json({ sucesso: true }); // Libera a tela do Kanban rapidamente
 
         // 2. 🤖 INÍCIO DA AUTOMAÇÃO DO ROBÔ DE MENSAGENS 🤖
-        // Busca os dados da venda para saber o telefone e nome do cliente
         const vendaQuery = await pool.query("SELECT * FROM vendas WHERE id = $1", [idVenda]);
         const venda = vendaQuery.rows[0];
 
         // Só tenta enviar se for um pedido de Delivery com telefone preenchido
         if (venda && venda.cliente_telefone && venda.cliente_telefone.trim() !== '') {
             
-            // Busca os textos que você salvou na tela de Integrações
             const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
             const config = configQuery.rows[0];
 
@@ -209,18 +207,43 @@ app.put('/api/vendas/:id/status', async (req, res) => {
 
                 if (textoMensagem) {
                     // 4. Limpeza e Formatação Mágica
-                    // Pega só o primeiro nome do cliente
                     const primeiroNome = venda.cliente_nome ? venda.cliente_nome.split(' ')[0] : 'Cliente';
                     
-                    // Troca as tags {nome} e {pedido} pelo nome real e número do pedido
-                    const textoPronto = textoMensagem
+                    let textoPronto = textoMensagem
                         .replace(/{nome}/g, primeiroNome)
                         .replace(/{pedido}/g, venda.id);
+
+                    // 🚀 A MÁGICA DO RECIBO: Anexa o resumo completo quando o pedido é aceito
+                    if (novoStatus === 'A Preparar') {
+                        let resumo = `\n\n*🛒 Resumo do seu pedido:*\n`;
+                        
+                        try {
+                            const itens = typeof venda.itens === 'string' ? JSON.parse(venda.itens) : venda.itens;
+                            itens.forEach(item => {
+                                resumo += `▪️ 1x ${item.nome.replace('Delivery: ', '')} - R$ ${Number(item.preco).toFixed(2).replace('.', ',')}\n`;
+                            });
+                        } catch(e) {}
+                        
+                        resumo += `\n*💰 Total:* R$ ${Number(venda.valor_total).toFixed(2).replace('.', ',')}`;
+                        resumo += `\n*💳 Pagamento:* ${venda.forma_pagamento}`;
+                        
+                        if (venda.cliente_endereco && !venda.cliente_endereco.includes('Retirada')) {
+                            resumo += `\n*📍 Entrega:* ${venda.cliente_endereco}`;
+                        } else {
+                            resumo += `\n*🏬 Retirada na Loja*`;
+                        }
+                        
+                        if (venda.observacoes && venda.observacoes.trim() !== '') {
+                            resumo += `\n*📝 Obs:* ${venda.observacoes}`;
+                        }
+
+                        textoPronto += resumo;
+                    }
 
                     // Limpa o telefone (tira os parênteses e espaços) e adiciona o '55' do Brasil
                     const telefoneLimpo = "55" + venda.cliente_telefone.replace(/\D/g, '');
 
-                    // 5. Manda a ordem de disparo para a Evolution API em background
+                    // 5. Manda a ordem de disparo para a Evolution API
                     const url = config.zap_url.trim().replace(/\/$/, "");
                     const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
 
@@ -234,16 +257,14 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                             number: telefoneLimpo,
                             text: textoPronto
                         })
-                    }).catch(err => console.error("⚠️ Robô falhou ao enviar mensagem silenciosa:", err));
+                    }).catch(err => console.error("⚠️ Robô falhou ao enviar mensagem:", err));
                 }
             }
         }
-        // FIM DA AUTOMAÇÃO
     } catch (e) { 
         console.error("Erro na rota de status:", e);
     }
 });
-
 // ==========================================
 // ROTAS DO SISTEMA DE LOGIN E RANKING
 // ==========================================
