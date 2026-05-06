@@ -161,20 +161,27 @@ app.get('/api/vendas', async (req, res) => {
     }
 });
 
+// ==========================================
+// 📝 CRIAR NOVA VENDA (COM SENHA DIÁRIA)
+// ==========================================
 app.post('/api/vendas', async (req, res) => { 
     try { 
-        // 🚀 NOVO: O motor agora extrai o transacao_id do pacote que o Cardápio envia
         const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id } = req.body;
         const valorFinal = valor_total || total || 0;
         const origemFinal = origem || 'Balcão';
         
+        // 🚀 MÁGICA DA SENHA DIÁRIA: Conta quantos pedidos já houveram HOJE e soma +1
+        const queryDiario = await pool.query("SELECT COALESCE(MAX(numero_diario), 0) + 1 AS proximo FROM vendas WHERE data_diaria = CURRENT_DATE");
+        const numeroDiario = queryDiario.rows[0].proximo;
+
         await pool.query(
-            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, 
-            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null]
+            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, numero_diario, data_diaria) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE)`, 
+            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario]
         ); 
         res.status(201).json({ sucesso: true }); 
     } catch (e) { 
+        console.error("Erro ao salvar venda:", e);
         res.status(500).json({erro:"Erro ao salvar venda"}); 
     }
 });
