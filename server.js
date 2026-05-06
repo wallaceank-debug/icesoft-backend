@@ -68,6 +68,14 @@ const pool = new Pool({
     connectionString: 'postgresql://neondb_owner:npg_w2HdxUFe0EXA@ep-crimson-violet-amb5wph0.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require'
 });
 
+// ==========================================
+// 🛠️ ATUALIZAÇÃO AUTOMÁTICA DO BANCO DE DADOS
+// ==========================================
+pool.query(`
+    ALTER TABLE vendas ADD COLUMN IF NOT EXISTS numero_diario INTEGER DEFAULT 0;
+    ALTER TABLE vendas ADD COLUMN IF NOT EXISTS data_diaria DATE DEFAULT CURRENT_DATE;
+`).catch(e => console.log("Aviso ao atualizar banco:", e));
+
 pool.connect()
     .then(() => {
         console.log('☁️ Banco de Dados PostgreSQL Conectado!');
