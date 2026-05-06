@@ -226,7 +226,7 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                     
                     let textoPronto = textoMensagem
                         .replace(/{nome}/g, primeiroNome)
-                        .replace(/{pedido}/g, venda.id);
+                        .replace(/{pedido}/g, venda.numero_diario || venda.id);
 
                     // 🚀 A MÁGICA DO RECIBO: Anexa o resumo completo quando o pedido é aceito
                     if (novoStatus === 'A Preparar') {
