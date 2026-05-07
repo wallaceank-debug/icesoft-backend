@@ -130,13 +130,26 @@ pool.connect()
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_promocao VARCHAR(50) DEFAULT 'nenhuma';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS valor_promocao DECIMAL(10,2) DEFAULT 0;
             ALTER TABLE categorias ADD COLUMN IF NOT EXISTS mostrar_cardapio BOOLEAN DEFAULT true;
+            
             -- 🚀 NOVO: Rastreio de Transações Externas (Mercado Pago)
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS transacao_id VARCHAR(100);
+
+            -- ==========================================
+            -- 🛠️ AS NOVAS INJEÇÕES DE HOJE COMEÇAM AQUI
+            -- ==========================================
+            
+            -- 🚀 NOVO: Reset Diário do Kanban (Senhas Curtas)
+            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS numero_diario INTEGER DEFAULT 0;
+            ALTER TABLE vendas ADD COLUMN IF NOT EXISTS data_diaria DATE DEFAULT CURRENT_DATE;
+            
+            -- 🚀 NOVO: Agendamento de Promoções (Quinta do Açaí)
+            ALTER TABLE produtos ADD COLUMN IF NOT EXISTS promo_dias VARCHAR(50) DEFAULT '';
+            ALTER TABLE produtos ADD COLUMN IF NOT EXISTS promo_inicio VARCHAR(10) DEFAULT '';
+            ALTER TABLE produtos ADD COLUMN IF NOT EXISTS promo_fim VARCHAR(10) DEFAULT '';
         `);
     })
     .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
     .catch(err => console.error('❌ Erro no banco:', err));
-
 
 // ==========================================
 // ROTA DE VENDAS (ATUALIZADA COM FILTRO DE DATA!)
