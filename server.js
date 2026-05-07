@@ -24,7 +24,6 @@ const pastaUploads = path.join(__dirname, 'uploads');
 app.use('/uploads', express.static(pastaUploads));
 
 // 🚀 NOVO SISTEMA DE UPLOAD COM COMPRESSÃO (SHARP)
-// Em vez de salvar no HD direto, seguramos a foto na memória RAM rapidinho
 const storage = multer.memoryStorage(); 
 const upload = multer({ storage: storage });
 
@@ -35,24 +34,21 @@ app.post('/api/upload', upload.single('imagem'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ sucesso: false, erro: "Nenhuma imagem foi enviada." });
 
-        // Cria o nome único do arquivo, mas agora SEMPRE forçando o formato final ser .webp
         const nomeArquivo = Date.now() + '-' + Math.round(Math.random() * 1E9) + '.webp';
         const caminhoFinal = path.join(pastaUploads, nomeArquivo);
 
-        // Garante que a pasta 'uploads' existe antes de tentar salvar algo lá
         if (!fs.existsSync(pastaUploads)){ fs.mkdirSync(pastaUploads, { recursive: true }); }
 
-        // 🪄 A MÁGICA DA COMPRESSÃO ACONTECE AQUI
         await sharp(req.file.buffer)
-            .rotate() // 🚀 CORREÇÃO: Lê o EXIF do celular e desvira a foto automaticamente!
+            .rotate() 
             .resize({ 
                 width: 600, 
                 height: 600, 
-                fit: 'inside', // Garante que a imagem caiba numa caixa 600x600 sem cortar pedaços
-                withoutEnlargement: true // Se a foto original for pequenininha (ex: 200px), ele não estica pra não perder qualidade
+                fit: 'inside', 
+                withoutEnlargement: true 
             }) 
-            .webp({ quality: 80 }) // Converte para formato WebP retendo 80% da qualidade visual (perfeito para telas)
-            .toFile(caminhoFinal); // Após processar na RAM, joga o arquivo levinho pro HD do servidor
+            .webp({ quality: 80 }) 
+            .toFile(caminhoFinal); 
 
         res.json({ sucesso: true, url: `/uploads/${nomeArquivo}` });
     } catch (erro) { 
@@ -71,11 +67,6 @@ const pool = new Pool({
 // ==========================================
 // 🛠️ ATUALIZAÇÃO AUTOMÁTICA DO BANCO DE DADOS
 // ==========================================
-pool.query(`
-    ALTER TABLE vendas ADD COLUMN IF NOT EXISTS numero_diario INTEGER DEFAULT 0;
-    ALTER TABLE vendas ADD COLUMN IF NOT EXISTS data_diaria DATE DEFAULT CURRENT_DATE;
-`).catch(e => console.log("Aviso ao atualizar banco:", e));
-
 pool.connect()
     .then(() => {
         console.log('☁️ Banco de Dados PostgreSQL Conectado!');
@@ -102,7 +93,6 @@ pool.connect()
                 id SERIAL PRIMARY KEY, nome TEXT, ordem INTEGER
             );
 
-            -- 🚀 NOVO: Tabela de Usuários e Chave Mestra
             CREATE TABLE IF NOT EXISTS usuarios (
                 id SERIAL PRIMARY KEY, 
                 username VARCHAR(100) UNIQUE, 
@@ -110,15 +100,12 @@ pool.connect()
                 cargo VARCHAR(50) DEFAULT 'admin'
             );
 
-            -- 🛡️ FORÇA a criação da coluna de e-mail caso a tabela seja velha
             ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email VARCHAR(255);
 
-            -- Agora sim, cria a chave mestra com total segurança
             INSERT INTO usuarios (username, senha, email, cargo) 
             VALUES ('admin', 'icesoft123', 'admin@icesoft.com', 'admin') 
             ON CONFLICT (username) DO NOTHING;
 
-            -- Alterações de atualização para tabelas existentes
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS origem VARCHAR(50) DEFAULT 'Balcão';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_url TEXT;
             ALTER TABLE grupos_adicionais ADD COLUMN IF NOT EXISTS obrigatorio BOOLEAN DEFAULT false;
@@ -126,23 +113,15 @@ pool.connect()
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS venda_por_peso BOOLEAN DEFAULT false;
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tag VARCHAR(50);
             
-            -- 🚀 NOVO: Promoções e Visibilidade
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo_promocao VARCHAR(50) DEFAULT 'nenhuma';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS valor_promocao DECIMAL(10,2) DEFAULT 0;
             ALTER TABLE categorias ADD COLUMN IF NOT EXISTS mostrar_cardapio BOOLEAN DEFAULT true;
             
-            -- 🚀 NOVO: Rastreio de Transações Externas (Mercado Pago)
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS transacao_id VARCHAR(100);
 
-            -- ==========================================
-            -- 🛠️ AS NOVAS INJEÇÕES DE HOJE COMEÇAM AQUI
-            -- ==========================================
-            
-            -- 🚀 NOVO: Reset Diário do Kanban (Senhas Curtas)
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS numero_diario INTEGER DEFAULT 0;
             ALTER TABLE vendas ADD COLUMN IF NOT EXISTS data_diaria DATE DEFAULT CURRENT_DATE;
             
-            -- 🚀 NOVO: Agendamento de Promoções (Quinta do Açaí)
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS promo_dias VARCHAR(50) DEFAULT '';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS promo_inicio VARCHAR(10) DEFAULT '';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS promo_fim VARCHAR(10) DEFAULT '';
@@ -183,7 +162,6 @@ app.post('/api/vendas', async (req, res) => {
         const valorFinal = valor_total || total || 0;
         const origemFinal = origem || 'Balcão';
         
-        // 🚀 MÁGICA DA SENHA DIÁRIA: Conta quantos pedidos já houveram HOJE e soma +1
         const queryDiario = await pool.query("SELECT COALESCE(MAX(numero_diario), 0) + 1 AS proximo FROM vendas WHERE data_diaria = CURRENT_DATE");
         const numeroDiario = queryDiario.rows[0].proximo;
 
@@ -207,15 +185,12 @@ app.put('/api/vendas/:id/status', async (req, res) => {
         const novoStatus = req.body.status;
         const idVenda = req.params.id;
 
-        // 1. Atualiza o status no Banco de Dados
         await pool.query("UPDATE vendas SET status = $1 WHERE id = $2", [novoStatus, idVenda]); 
-        res.json({ sucesso: true }); // Libera a tela do Kanban rapidamente
+        res.json({ sucesso: true }); 
 
-        // 2. 🤖 INÍCIO DA AUTOMAÇÃO DO ROBÔ DE MENSAGENS 🤖
         const vendaQuery = await pool.query("SELECT * FROM vendas WHERE id = $1", [idVenda]);
         const venda = vendaQuery.rows[0];
 
-        // Só tenta enviar se for um pedido de Delivery com telefone preenchido
         if (venda && venda.cliente_telefone && venda.cliente_telefone.trim() !== '') {
             
             const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
@@ -224,7 +199,6 @@ app.put('/api/vendas/:id/status', async (req, res) => {
             if (config && config.zap_url && config.zap_key && config.zap_instancia) {
                 let textoMensagem = null;
 
-                // 3. Escolhe a gaveta certa dependendo da coluna do Kanban
                 if (novoStatus === 'A Preparar' && config.msg_aceito) {
                     textoMensagem = config.msg_aceito;
                 } else if (novoStatus === 'Saiu p/ Entrega' && config.msg_entrega) {
@@ -234,14 +208,12 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                 }
 
                 if (textoMensagem) {
-                    // 4. Limpeza e Formatação Mágica
                     const primeiroNome = venda.cliente_nome ? venda.cliente_nome.split(' ')[0] : 'Cliente';
                     
                     let textoPronto = textoMensagem
                         .replace(/{nome}/g, primeiroNome)
                         .replace(/{pedido}/g, venda.numero_diario || venda.id);
 
-                    // 🚀 A MÁGICA DO RECIBO: Anexa o resumo completo quando o pedido é aceito
                     if (novoStatus === 'A Preparar') {
                         let resumo = `\n\n*🛒 Resumo do seu pedido:*\n`;
                         
@@ -268,10 +240,8 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                         textoPronto += resumo;
                     }
 
-                    // Limpa o telefone (tira os parênteses e espaços) e adiciona o '55' do Brasil
                     const telefoneLimpo = "55" + venda.cliente_telefone.replace(/\D/g, '');
 
-                    // 5. Manda a ordem de disparo para a Evolution API
                     const url = config.zap_url.trim().replace(/\/$/, "");
                     const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
 
@@ -293,26 +263,25 @@ app.put('/api/vendas/:id/status', async (req, res) => {
         console.error("Erro na rota de status:", e);
     }
 });
+
 // ==========================================
 // ROTAS DO SISTEMA DE LOGIN E RANKING
 // ==========================================
 app.post('/api/login', async (req, res) => {
     const { username, senha } = req.body;
     try {
-        // Tenta achar alguém com esse username e senha ou email e senha
         const resultado = await pool.query(
             'SELECT * FROM usuarios WHERE (username = $1 OR email = $1) AND senha = $2', 
             [username, senha]
         );
         
         if (resultado.rows.length > 0) {
-            // Se achou, entrega o crachá com um token dinâmico
             res.json({ 
                 sucesso: true, 
                 mensagem: "Login aprovado", 
                 token: "cracha-icesoft-aprovado-" + Date.now(), 
                 cargo: resultado.rows[0].cargo,
-                usuario_id: resultado.rows[0].id // Mandamos a ID para poder mudar a senha depois
+                usuario_id: resultado.rows[0].id 
             });
         } else {
             res.status(401).json({ sucesso: false, erro: "Usuário ou senha incorretos!" });
@@ -323,13 +292,11 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// A NOVA Rota para Mudar os Dados (Senha/Email)
 app.put('/api/usuarios/:id', async (req, res) => {
     const userId = req.params.id;
     const { novo_username, novo_email, nova_senha } = req.body;
 
     try {
-        // Pega os dados atuais do usuário para não apagar o que ele não preencheu
         const userAtual = await pool.query('SELECT * FROM usuarios WHERE id = $1', [userId]);
         if (userAtual.rows.length === 0) return res.status(404).json({ erro: "Usuário não encontrado" });
 
@@ -339,7 +306,6 @@ app.put('/api/usuarios/:id', async (req, res) => {
         const emailFinal = novo_email || user.email;
         const senhaFinal = nova_senha || user.senha; 
 
-        // Atualiza a tabela com as novas credenciais
         await pool.query(
             'UPDATE usuarios SET username = $1, email = $2, senha = $3 WHERE id = $4',
             [usernameFinal, emailFinal, senhaFinal, userId]
@@ -353,7 +319,6 @@ app.put('/api/usuarios/:id', async (req, res) => {
     }
 });
 
-// A sua rota de Ranking mantida intacta
 app.get('/api/ranking', async (req, res) => {
     try {
         const querySql = `
@@ -397,10 +362,11 @@ app.delete('/api/mesas/:id', async (req, res) => { try { await pool.query('DELET
 // ==========================================
 app.get('/api/status', (req, res) => res.json({ mensagem: "✅ Motor v5.0 pronto para Relatórios!" }));
 app.get('/api/produtos', async (req, res) => { try { res.json((await pool.query('SELECT * FROM produtos ORDER BY id ASC')).rows.map(p => ({...p, preco: parseFloat(p.preco)}))); } catch (e) { res.status(500).json({erro:"Erro"}); }});
+
 app.post('/api/produtos', async (req, res) => { 
     try { 
         res.json({ sucesso: true, produto: (await pool.query(
-            'INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, tag, tipo_promocao, valor_promocao) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *', 
+            'INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, tag, tipo_promocao, valor_promocao, promo_dias, promo_inicio, promo_fim) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *', 
             [
                 req.body.nome, 
                 req.body.descricao, 
@@ -411,8 +377,11 @@ app.post('/api/produtos', async (req, res) => {
                 req.body.imagem_url, 
                 req.body.venda_por_peso || false, 
                 req.body.tag || '',
-                req.body.tipo_promocao || 'nenhuma', // 👈 NOVA GAVETA
-                req.body.valor_promocao || 0         // 👈 NOVA GAVETA
+                req.body.tipo_promocao || 'nenhuma', 
+                req.body.valor_promocao || 0,
+                req.body.promo_dias || '',     // 👈 NOVA INJEÇÃO AQUI
+                req.body.promo_inicio || '',   // 👈 NOVA INJEÇÃO AQUI
+                req.body.promo_fim || ''       // 👈 NOVA INJEÇÃO AQUI
             ]
         )).rows[0] }); 
     } catch (e) { res.status(500).json({erro:"Erro ao salvar produto"}); }
@@ -421,7 +390,7 @@ app.post('/api/produtos', async (req, res) => {
 app.put('/api/produtos/:id', async (req, res) => { 
     try { 
         res.json({ sucesso: true, produto: (await pool.query(
-            'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7, venda_por_peso = $8, tag = $9, tipo_promocao = $10, valor_promocao = $11 WHERE id = $12 RETURNING *', 
+            'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7, venda_por_peso = $8, tag = $9, tipo_promocao = $10, valor_promocao = $11, promo_dias = $12, promo_inicio = $13, promo_fim = $14 WHERE id = $15 RETURNING *', 
             [
                 req.body.nome, 
                 req.body.descricao, 
@@ -432,13 +401,17 @@ app.put('/api/produtos/:id', async (req, res) => {
                 req.body.imagem_url, 
                 req.body.venda_por_peso || false, 
                 req.body.tag || '',
-                req.body.tipo_promocao || 'nenhuma', // 👈 NOVA GAVETA
-                req.body.valor_promocao || 0,        // 👈 NOVA GAVETA
+                req.body.tipo_promocao || 'nenhuma', 
+                req.body.valor_promocao || 0,
+                req.body.promo_dias || '',     // 👈 NOVA INJEÇÃO AQUI
+                req.body.promo_inicio || '',   // 👈 NOVA INJEÇÃO AQUI
+                req.body.promo_fim || '',      // 👈 NOVA INJEÇÃO AQUI
                 req.params.id
             ]
         )).rows[0] }); 
     } catch (e) { res.status(500).json({erro:"Erro ao atualizar produto"}); }
 });
+
 app.delete('/api/produtos/:id', async (req, res) => { try { await pool.query('DELETE FROM produtos WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/produtos/:id/status', async (req, res) => { try { await pool.query('UPDATE produtos SET ativo = $1 WHERE id = $2', [req.body.ativo, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
@@ -451,7 +424,7 @@ app.put('/api/grupos/:id/status', async (req, res) => { try { await pool.query('
 app.get('/api/categorias', async (req, res) => { try { res.json((await pool.query('SELECT * FROM categorias ORDER BY ordem ASC, id ASC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.post('/api/categorias', async (req, res) => { 
     try { 
-        const mostrar = req.body.mostrar_cardapio !== false; // Se vier vazio, é true
+        const mostrar = req.body.mostrar_cardapio !== false; 
         res.json({ sucesso: true, categoria: (await pool.query('INSERT INTO categorias (nome, ordem, mostrar_cardapio) VALUES ($1, $2, $3) RETURNING *', [req.body.nome, req.body.ordem || 0, mostrar])).rows[0] }); 
     } catch (e) { 
         res.status(500).json({erro:"Erro"}); 
@@ -459,7 +432,6 @@ app.post('/api/categorias', async (req, res) => {
 });
 app.delete('/api/categorias/:id', async (req, res) => { try { await pool.query('DELETE FROM categorias WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
-// 🎚️ NOVA ROTA: Atualiza a visibilidade da categoria no Cardápio App
 app.put('/api/categorias/:id', async (req, res) => { 
     try { 
         const mostrar = req.body.mostrar_cardapio !== false;
@@ -470,7 +442,6 @@ app.put('/api/categorias/:id', async (req, res) => {
     }
 });
 
-// Rota para salvar a reordenação (Drag and Drop)
 app.put('/api/categorias/ordem', async (req, res) => {
     try {
         const categorias = req.body; 
@@ -493,7 +464,6 @@ app.delete('/api/cidades/:id', async (req, res) => { try { await pool.query('DEL
 app.get('/api/bairros', async (req, res) => { try { res.json((await pool.query('SELECT * FROM bairros ORDER BY cidade ASC, nome ASC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.post('/api/bairros', async (req, res) => { 
     try { 
-        // Se a cidade vier vazia, usamos Quatis como proteção contra falhas
         const cidadeStr = req.body.cidade || 'Quatis';
         res.json((await pool.query('INSERT INTO bairros (nome, taxa, cidade) VALUES ($1, $2, $3) RETURNING *', [req.body.nome, req.body.taxa, cidadeStr])).rows[0]); 
     } catch (e) { 
@@ -508,13 +478,11 @@ app.get('/api/configuracoes', async (req, res) => { try { const configs = {}; (a
 
 app.put('/api/configuracoes', async (req, res) => {
     try {
-        // Pega todas as configurações que o painel enviou (ex: nome_loja, cor, banner)
         const chaves = Object.keys(req.body);
         
         for (let chave of chaves) {
-            let valor = String(req.body[chave]); // Transforma tudo em texto para o banco aceitar
+            let valor = String(req.body[chave]); 
             
-            // Tenta inserir a nova configuração. Se a gaveta (chave) já existir, ele só atualiza o valor!
             await pool.query(
                 `INSERT INTO configuracoes (chave, valor) VALUES ($1, $2)
                  ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor`,
@@ -533,7 +501,6 @@ app.put('/api/configuracoes', async (req, res) => {
 // ==========================================
 app.get('/api/crm/clientes', async (req, res) => {
     try {
-        // A mágica do SQL: Agrupa as vendas pelo telefone do cliente (ignorando vendas canceladas ou sem telefone)
         const querySql = `
             SELECT 
                 cliente_telefone AS telefone,
@@ -561,7 +528,6 @@ app.get('/api/crm/clientes', async (req, res) => {
 // ⚙️ ROTAS DE CONFIGURAÇÕES (WHATSAPP E MENSAGENS)
 // ==========================================
 
-// 1. Cria a NOVA tabela separada só para integrações
 pool.query(`
     CREATE TABLE IF NOT EXISTS integracoes_config (
         id SERIAL PRIMARY KEY,
@@ -580,7 +546,6 @@ pool.query(`
     }
 }).catch(console.error);
 
-// 2. Rota para LER as configurações de integração
 app.get('/api/integracoes', async (req, res) => {
     try {
         const { rows } = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
@@ -590,14 +555,10 @@ app.get('/api/integracoes', async (req, res) => {
     }
 });
 
-// 3. Rota para SALVAR as configurações (VERSÃO RAIO-X)
 app.put('/api/integracoes', async (req, res) => {
-    console.log("📥 DADOS RECEBIDOS DO PAINEL PARA SALVAR:", req.body);
-    
     try {
         const dados = req.body;
         if (!dados || Object.keys(dados).length === 0) {
-            console.log("⚠️ ALERTA: O painel não enviou nenhum dado!");
             return res.json({ sucesso: true }); 
         }
 
@@ -611,15 +572,11 @@ app.put('/api/integracoes', async (req, res) => {
         let valores = Object.values(dados);
 
         await pool.query(`UPDATE integracoes_config SET ${querySet}`, valores);
-        
-        console.log("✅ BANCO ATUALIZADO COM SUCESSO!");
         res.json({ sucesso: true });
     } catch (e) {
-        console.error("❌ Erro ao salvar config:", e);
         res.status(500).json({ erro: "Erro ao salvar configurações" });
     }
 });
-
 
 // ==========================================
 // 🤖 ROTAS DE INTEGRAÇÃO DO WHATSAPP
@@ -629,17 +586,12 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
         const { rows } = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
         const config = rows[0];
 
-        console.log("🔍 Tentando conectar Zap com:", config);
-
         if (!config || !config.zap_url || !config.zap_key || !config.zap_instancia) {
             return res.status(400).json({ erro: "WhatsApp não configurado. Salve os dados no painel primeiro!" });
         }
 
-        // 1. Limpeza de dados (Tira a barra '/' do final da URL, se o usuário digitou por engano)
         const url = config.zap_url.trim().replace(/\/$/, ""); 
         const key = config.zap_key.trim();
-        
-        // 2. Proteção de URL: Codifica espaços e caracteres especiais no nome da instância
         const nomeInstanciaBruto = config.zap_instancia.trim();
         const instanciaURL = encodeURIComponent(nomeInstanciaBruto);
 
@@ -648,13 +600,9 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
             'Content-Type': 'application/json'
         };
 
-        // 3. Checa se a instância já existe
         const resStatus = await fetch(`${url}/instance/connectionState/${instanciaURL}`, { headers });
         
         if (resStatus.status === 404) {
-            console.log("🛠️ Instância não existe. Criando nova...");
-            
-            // 4. Cria a instância e JÁ FORÇA a geração do QR Code
             const resCreate = await fetch(`${url}/instance/create`, {
                 method: 'POST',
                 headers: headers,
@@ -662,29 +610,25 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
                     instanceName: nomeInstanciaBruto,
                     qrcode: true, 
                     integration: "WHATSAPP-BAILEYS",
-                    // 🛡️ BLINDAGEM DE SERVIDOR (Evita travamentos no Easypanel)
-                    reject_call: true,       // Ignora ligações de voz/vídeo no Zap
-                    groupsIgnore: true,      // Ignora processamento de Grupos (Poupa MUITA RAM)
-                    readMessages: false,     // Não marca mensagens como lidas automaticamente
-                    readStatus: false,       // Não baixa Status/Stories dos contatos
-                    syncFullHistory: false   // PROÍBE o download de histórico antigo (Alivia a CPU)
+                    reject_call: true,       
+                    groupsIgnore: true,      
+                    readMessages: false,     
+                    readStatus: false,       
+                    syncFullHistory: false   
                 })
             });
             
             const dataCreate = await resCreate.json();
             
-            // A API Evolution pode devolver o base64 dentro do objeto 'qrcode' ou direto na raiz
             if (dataCreate.qrcode && dataCreate.qrcode.base64) {
                 return res.json({ status: 'QRCODE', qrcode: dataCreate.qrcode.base64 });
             } else if (dataCreate.base64) {
                 return res.json({ status: 'QRCODE', qrcode: dataCreate.base64 });
             }
         } else if (!resStatus.ok) {
-            // Proteção extra: se a Evolution retornar 401 (Não Autorizado) ou 403 (Proibido)
             return res.status(400).json({ erro: "A Evolution API recusou a conexão. Verifique se a sua Global API Key está correta!" });
         } else {
             const dataStatus = await resStatus.json();
-            // Garante compatibilidade com a Evolution API v1 e v2
             const estado = dataStatus.instance?.state || dataStatus.state;
             
             if (estado === 'open') {
@@ -692,7 +636,6 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
             }
         }
 
-        // 5. Se a instância já existe mas não está conectada, tenta puxar o QR Code
         const resQr = await fetch(`${url}/instance/connect/${instanciaURL}`, { headers });
         const dataQr = await resQr.json();
 
@@ -701,13 +644,11 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
         } else if (dataQr.qrcode && dataQr.qrcode.base64) {
             return res.json({ status: 'QRCODE', qrcode: dataQr.qrcode.base64 });
         } else {
-            // Se o servidor da Evolution demorar a cuspir a imagem
             return res.json({ status: 'AGUARDANDO', mensagem: 'A Evolution API está preparando o QR Code. Tente novamente em 5 segundos.' });
         }
 
     } catch (e) {
         console.error("❌ Erro fatal na API do Zap:", e);
-        // Erro genérico de rede (caso a URL digitada não exista ou esteja fora do ar)
         res.status(500).json({ erro: "Falha de comunicação de rede. A URL da Evolution API está rodando no Easypanel?" });
     }
 });
@@ -715,21 +656,17 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
 // ==========================================
 // 💸 INTEGRAÇÃO MERCADO PAGO (PIX DINÂMICO)
 // ==========================================
-
-// 1. O GERADOR: Comunica com o Mercado Pago e devolve o Copia e Cola
 app.post('/api/pagamento/pix', async (req, res) => {
     try {
         const { valor, cliente_nome, cliente_telefone } = req.body;
 
-        // Busca a sua chave secreta do MP no nosso banco de dados
         const configQuery = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'");
         const mpToken = configQuery.rows[0]?.valor;
 
         if (!mpToken) return res.status(400).json({ erro: "Mercado Pago não configurado no painel." });
 
-        const idempotencyKey = "ICE-" + Date.now(); // Proteção contra cobrança duplicada
+        const idempotencyKey = "ICE-" + Date.now(); 
 
-        // Faz o pedido do Pix direto pro servidor do Mercado Pago
         const mpResponse = await fetch('https://api.mercadopago.com/v1/payments', {
             method: 'POST',
             headers: {
@@ -742,7 +679,7 @@ app.post('/api/pagamento/pix', async (req, res) => {
                 description: "Pedido Icesoft Delivery",
                 payment_method_id: "pix",
                 payer: {
-                    email: "delivery@icesoft.com.br", // O MP exige e-mail, usamos um genérico se o cliente não der
+                    email: "delivery@icesoft.com.br", 
                     first_name: cliente_nome || "Cliente"
                 }
             })
@@ -755,7 +692,6 @@ app.post('/api/pagamento/pix', async (req, res) => {
             return res.status(500).json({ erro: "Falha ao gerar o Pix. Verifique a chave de acesso." });
         }
 
-        // Devolve o QR Code e o Copia-Cola para o celular do cliente!
         res.json({
             sucesso: true,
             transacao_id: data.id,
@@ -769,9 +705,7 @@ app.post('/api/pagamento/pix', async (req, res) => {
     }
 });
 
-// 2. O VIGIA (WEBHOOK): Fica escutando o Mercado Pago avisar que o cliente pagou
 app.post('/api/pagamento/webhook', async (req, res) => {
-    // Retornamos 200 rápido pro Mercado Pago não ficar travado
     res.status(200).send("OK");
 
     try {
@@ -780,7 +714,6 @@ app.post('/api/pagamento/webhook', async (req, res) => {
         if (type === 'payment') {
             const pagamentoId = data.id;
 
-            // Pega a chave para consultar a veracidade do pagamento
             const configQuery = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'");
             const mpToken = configQuery.rows[0]?.valor;
 
@@ -790,8 +723,6 @@ app.post('/api/pagamento/webhook', async (req, res) => {
             const pgtoInfo = await mpResponse.json();
 
             if (pgtoInfo.status === 'approved') {
-                // 🚀 PAGAMENTO CONFIRMADO!
-                // Muda o status da venda e avisa a produção
                 await pool.query("UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1", [pagamentoId.toString()]);
                 console.log(`✅ Pagamento Pix ${pagamentoId} APROVADO e baixado no sistema!`);
             }
@@ -801,22 +732,18 @@ app.post('/api/pagamento/webhook', async (req, res) => {
     }
 });
 
-// 3. ROTA ATIVA (Bypass de Webhook): O Cardápio pergunta ativamente se foi pago
 app.get('/api/pagamento/pix/:id/status', async (req, res) => {
     try {
         const pagamentoId = req.params.id;
         
-        // Pega a chave no cofre
         const configQuery = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'");
         const mpToken = configQuery.rows[0]?.valor;
 
-        // Bate na porta do Mercado Pago e pergunta o status do Pix
         const mpResponse = await fetch(`https://api.mercadopago.com/v1/payments/${pagamentoId}`, {
             headers: { 'Authorization': `Bearer ${mpToken}` }
         });
         const pgtoInfo = await mpResponse.json();
 
-        // Se o MP confirmar que está aprovado, nós mesmos damos a baixa!
         if (pgtoInfo.status === 'approved') {
             await pool.query("UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1", [pagamentoId.toString()]);
             res.json({ pago: true });
