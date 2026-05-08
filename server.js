@@ -415,6 +415,39 @@ app.get('/api/caixa/historico', async (req, res) => {
 }); // <--- Faltava fechar isso aqui!
 
 // ==========================================
+// ROTA NOVA: DETALHES DO CAIXA (VENDAS E SANGRIAS)
+// ==========================================
+app.get('/api/caixa/:id/detalhes', async (req, res) => {
+  try {
+    const caixaId = req.params.id;
+    // 1. Busca as informações básicas do caixa
+    const caixa = (await pool.query('SELECT * FROM controle_caixa WHERE id = $1', [caixaId])).rows[0];
+
+    if (!caixa) {
+      return res.status(404).json({ erro: "Caixa não encontrado" });
+    }
+
+    // 2. Busca as despesas (Sangrias e Suprimentos) deste caixa
+    const movimentacoes = (await pool.query('SELECT * FROM movimentacoes_caixa WHERE caixa_id = $1 ORDER BY id DESC', [caixaId])).rows;
+
+    // 3. Busca todas as vendas que ocorreram entre a abertura e o fechamento
+    let vendas = [];
+    if (caixa.data_abertura && caixa.data_fechamento) {
+      vendas = (await pool.query(
+        'SELECT * FROM vendas WHERE data_hora >= $1 AND data_hora <= $2 ORDER BY data_hora DESC',
+        [caixa.data_abertura, caixa.data_fechamento]
+      )).rows;
+    }
+
+    // Empacota tudo e envia para a tela!
+    res.json({ caixa, movimentacoes, vendas });
+  } catch (e) {
+    console.error("Erro ao buscar detalhes do caixa:", e);
+    res.status(500).json({ erro: "Erro Técnico" });
+  }
+});
+
+// ==========================================
 // ROTAS DE MESAS E COMANDAS
 // ==========================================
 app.get('/api/mesas', async (req, res) => { try { res.json((await pool.query('SELECT * FROM mesas_ativas ORDER BY numero ASC')).rows); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
