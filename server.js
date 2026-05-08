@@ -350,6 +350,65 @@ app.get('/api/caixa/resumo/:id', async (req, res) => {
 });
 
 // ==========================================
+// ROTA NOVA: HISTÓRICO DE CAIXAS (MÊS)
+// ==========================================
+app.get('/api/caixa/historico', async (req, res) => {
+  try {
+    const { mes } = req.query; // Recebe no formato "YYYY-MM"
+    
+    // 1. Puxa todos os caixas que foram fechados no mês escolhido
+    const querySql = `
+      SELECT * FROM controle_caixa 
+      WHERE status = 'Fechado' 
+      AND TO_CHAR(data_fechamento, 'YYYY-MM') = $1
+      ORDER BY data_fechamento DESC
+    `;
+    const caixas = (await pool.query(querySql, [mes])).rows;
+    
+    let historico = [];
+    
+    // 2. Calcula os totais de vendas e despesas exatos para cada caixa
+    for (let c of caixas) {
+        // Soma as vendas em Dinheiro durante o período do caixa
+        const vendasDinheiro = parseFloat((await pool.query(
+            `SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE LOWER(TRIM(forma_pagamento)) = 'dinheiro' AND data_hora >= $1 AND data_hora <= $2`, 
+            [c.data_abertura, c.data_fechamento]
+        )).rows[0].total) || 0;
+        
+        // Soma as vendas em Cartão/Pix (tudo que NÃO for dinheiro)
+        const vendasCartao = parseFloat((await pool.query(
+            `SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE LOWER(TRIM(forma_pagamento)) != 'dinheiro' AND data_hora >= $1 AND data_hora <= $2`, 
+            [c.data_abertura, c.data_fechamento]
+        )).rows[0].total) || 0;
+        
+        // Soma as Despesas (Sangrias) tiradas desse caixa específico
+        const despesas = parseFloat((await pool.query(
+            `SELECT COALESCE(SUM(valor), 0) as total FROM movimentacoes_caixa WHERE caixa_id = $1 AND LOWER(TRIM(tipo)) = 'sangria'`, 
+            [c.id]
+        )).rows[0].total) || 0;
+        
+        // Formatador de data e hora para ficar bonito na tela
+        const formataData = (d) => d ? new Date(d).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'Sem registro';
+
+        // Empacota os dados para enviar para o Dashboard
+        historico.push({
+            id: c.id,
+            dataAbertura: formataData(c.data_abertura),
+            dataFechamento: formataData(c.data_fechamento),
+            totalCartao: vendasCartao,
+            totalDinheiro: vendasDinheiro,
+            totalDespesas: despesas
+        });
+    }
+    
+    res.json(historico);
+  } catch (e) {
+    console.error("Erro ao gerar histórico de caixas:", e);
+    res.status(500).json({ erro: "Erro Técnico ao buscar histórico" });
+  }
+});
+
+// ==========================================
 // ROTAS DE MESAS E COMANDAS
 // ==========================================
 app.get('/api/mesas', async (req, res) => { try { res.json((await pool.query('SELECT * FROM mesas_ativas ORDER BY numero ASC')).rows); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
