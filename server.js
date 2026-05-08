@@ -369,25 +369,25 @@ app.get('/api/caixa/historico', async (req, res) => {
     
     // 2. Calcula os totais de vendas e despesas exatos para cada caixa
     for (let c of caixas) {
-        // Soma as vendas em Dinheiro (usamos ILIKE '%dinheiro%' para pegar os pedidos que tem troco anotado)
+        // Soma Dinheiro
         const vendasDinheiro = parseFloat((await pool.query(
             `SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE forma_pagamento ILIKE '%dinheiro%' AND data_hora >= $1 AND data_hora <= $2`, 
             [c.data_abertura, c.data_fechamento]
         )).rows[0].total) || 0;
         
-        // Soma as vendas em Cartão (Crédito ou Débito)
+        // Soma Cartão
         const vendasCartao = parseFloat((await pool.query(
             `SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE (forma_pagamento ILIKE '%cartão%' OR forma_pagamento ILIKE '%cartao%') AND data_hora >= $1 AND data_hora <= $2`, 
             [c.data_abertura, c.data_fechamento]
         )).rows[0].total) || 0;
 
-        // Soma as vendas em PIX (Pix Online ou Pix na Entrega)
+        // Soma PIX
         const vendasPix = parseFloat((await pool.query(
             `SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE forma_pagamento ILIKE '%pix%' AND data_hora >= $1 AND data_hora <= $2`, 
             [c.data_abertura, c.data_fechamento]
         )).rows[0].total) || 0;
         
-        // Soma as Despesas (Sangrias)
+        // Soma Despesas
         const despesas = parseFloat((await pool.query(
             `SELECT COALESCE(SUM(valor), 0) as total FROM movimentacoes_caixa WHERE caixa_id = $1 AND LOWER(TRIM(tipo)) = 'sangria'`, 
             [c.id]
@@ -401,10 +401,18 @@ app.get('/api/caixa/historico', async (req, res) => {
             dataFechamento: formataData(c.data_fechamento),
             totalCartao: vendasCartao,
             totalDinheiro: vendasDinheiro,
-            totalPix: vendasPix, // Nova informação embalada e enviada!
+            totalPix: vendasPix,
             totalDespesas: despesas
         });
     }
+    
+    // AS LINHAS ABAIXO PROVAVELMENTE TINHAM SIDO APAGADAS!
+    res.json(historico);
+  } catch (e) {
+    console.error("Erro ao gerar histórico de caixas:", e);
+    res.status(500).json({ erro: "Erro Técnico ao buscar histórico" });
+  }
+}); // <--- Faltava fechar isso aqui!
 
 // ==========================================
 // ROTAS DE MESAS E COMANDAS
