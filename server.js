@@ -901,6 +901,20 @@ app.get('/api/pagamento/pix/:id/status', async (req, res) => {
     }
 });
 
+// ==========================================
+// ROTA DO ESTOQUE RÁPIDO (CORREÇÃO 404)
+// ==========================================
+app.put('/api/produtos/:id/estoque', async (req, res) => {
+  try {
+    const { estoque } = req.body;
+    await pool.query('UPDATE produtos SET estoque = $1 WHERE id = $2', [estoque, req.params.id]);
+    res.json({ sucesso: true });
+  } catch (e) {
+    console.error("Erro ao mudar estoque", e);
+    res.status(500).json({erro: "Erro ao alterar estoque."});
+  }
+});
+
 // Iniciando Servidor
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
