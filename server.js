@@ -176,54 +176,51 @@ app.post('/api/vendas', async (req, res) => {
         try {
           let itensComprados = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
           
-          // 1. Puxa o catálogo para a memória e ordena do maior nome para o menor 
-          // (Isso impede que "Picolé" roube a baixa do "Picolé de Morango")
+          // 1. Puxa o catálogo e ordena do maior para o menor
           const queryEstoque = await pool.query("SELECT id, nome, estoque, ativo FROM produtos");
           let produtosNoBanco = queryEstoque.rows.sort((a, b) => b.nome.length - a.nome.length);
 
           for (let item of itensComprados) {
             let qtd = item.quantidade ? Number(item.quantidade) : 1;
-            let nomeLimpo = item.nome || item.produto_nome || item.nomeBase || "";
-            let p = null;
+            let nomeRaw = item.nome || item.produto_nome || item.nomeBase || "";
             
-            if (typeof nomeLimpo === 'string' && nomeLimpo.trim() !== "") {
-              // Limpa prefixos de origens e mesas
-              nomeLimpo = nomeLimpo.replace("Delivery:", "").replace("Balcão:", "").trim();
-              if (nomeLimpo.includes(" - ")) nomeLimpo = nomeLimpo.split(" - ")[1].trim();
-              nomeLimpo = nomeLimpo.split("(")[0].trim();
+            if (typeof nomeRaw === 'string' && nomeRaw.trim() !== "") {
               
-              // 🚀 BLINDAGEM MÁXIMA: Tira emojis, acentos, põe em minúsculo e tira espaços
-              let nomeBusca = nomeLimpo.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '')
+              // 2. Limpa SOMENTE acentos, emojis e põe minúsculo (Não vamos mais cortar palavras!)
+              let nomeBusca = nomeRaw.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '')
                                        .toLowerCase()
                                        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
                                        .trim();
 
-              // Faz o "Match" Cruzando o carrinho com o banco de dados
-              p = produtosNoBanco.find(prod => {
-                  let nomeBD = prod.nome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-                  return nomeBusca === nomeBD || nomeBusca.includes(nomeBD);
+              // 3. A Mágica: Verifica se o nome do banco de dados ESTÁ DENTRO do texto sujo do carrinho
+              let p = produtosNoBanco.find(prod => {
+                  let nomeBD = prod.nome.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '')
+                                        .toLowerCase()
+                                        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+                                        .trim();
+                  // Aqui está o segredo: inclui?
+                  return nomeBusca.includes(nomeBD);
               });
-            }
 
-            // ✅ SE ACHOU O PRODUTO E ELE TEM CONTROLE DE ESTOQUE
-            if (p) {
-                if (p.estoque !== null && p.estoque > 0) {
-                    let novoEstoque = Number(p.estoque) - qtd;
-                    let continuaAtivo = p.ativo;
-                    
-                    if (novoEstoque <= 0) {
-                      novoEstoque = 0;
-                      continuaAtivo = false; // 🚫 Zera e Bloqueia automaticamente
-                    }
-                    
-                    // Salva a alteração no banco
-                    await pool.query("UPDATE produtos SET estoque = $1, ativo = $2 WHERE id = $3", [novoEstoque, continuaAtivo, p.id]);
-                    p.estoque = novoEstoque; // Atualiza a memória para produtos repetidos no carrinho
-                    
-                    console.log(`📉 Estoque de '${p.nome}' baixado com sucesso. Restam: ${novoEstoque}`);
-                }
-            } else {
-                console.log(`⚠️ Aviso: Produto não encontrado para baixa: '${item.nome}'`);
+              // ✅ SE ACHOU O PRODUTO E ELE TEM CONTROLE DE ESTOQUE
+              if (p) {
+                  if (p.estoque !== null && p.estoque > 0) {
+                      let novoEstoque = Number(p.estoque) - qtd;
+                      let continuaAtivo = p.ativo;
+                      
+                      if (novoEstoque <= 0) {
+                        novoEstoque = 0;
+                        continuaAtivo = false; 
+                      }
+                      
+                      await pool.query("UPDATE produtos SET estoque = $1, ativo = $2 WHERE id = $3", [novoEstoque, continuaAtivo, p.id]);
+                      p.estoque = novoEstoque; 
+                      
+                      console.log(`📉 Estoque de '${p.nome}' baixado com sucesso. Restam: ${novoEstoque}`);
+                  }
+              } else {
+                  console.log(`⚠️ Aviso: Produto não encontrado para baixa: '${nomeRaw}' (Texto limpo procurado: '${nomeBusca}')`);
+              }
             }
           }
         } catch (erroEstoque) {
