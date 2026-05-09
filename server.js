@@ -173,49 +173,65 @@ app.post('/api/vendas', async (req, res) => {
         ); 
 
         // === INÍCIO DO SISTEMA DE BAIXA DE ESTOQUE ===
-try {
-  let itensComprados = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
-  
-  for (let item of itensComprados) {
-    let qtd = item.quantidade ? Number(item.quantidade) : 1;
-    let nomeLimpo = item.nome || item.produto_nome || item.nomeBase || "";
-    
-    if (typeof nomeLimpo === 'string' && nomeLimpo.trim() !== "") {
-      // 1. Limpeza cirúrgica simples (sem uso de Regex)
-      nomeLimpo = nomeLimpo.replace("Delivery:", "").replace("Balcão:", "").trim();
-      
-      // 2. Se for da Mesa (ex: "Mesa 4 - Picolé de Uva"), pega só o nome do produto
-      if (nomeLimpo.includes(" - ")) {
-        nomeLimpo = nomeLimpo.split(" - ")[1].trim();
-      }
-      
-      // 3. Corta os adicionais (ex: "Açaí Dois Amores (1x Morango)")
-      nomeLimpo = nomeLimpo.split("(")[0].trim();
-      
-      // Procura o produto exato no banco de dados
-      const prodQuery = await pool.query("SELECT id, estoque, ativo FROM produtos WHERE nome = $1 LIMIT 1", [nomeLimpo]);
-      
-      if (prodQuery.rows.length > 0) {
-        let p = prodQuery.rows[0];
-        
-        // Só dá baixa se houver controle de estoque
-        if (p.estoque !== null && p.estoque > 0) {
-          let novoEstoque = p.estoque - qtd;
-          let continuaAtivo = p.ativo;
+        try {
+          let itensComprados = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
           
-          if (novoEstoque <= 0) {
-            novoEstoque = 0;
-            continuaAtivo = false; 
+          for (let item of itensComprados) {
+            let qtd = item.quantidade ? Number(item.quantidade) : 1;
+            let nomeLimpo = item.nome || item.produto_nome || item.nomeBase || "";
+            
+            if (typeof nomeLimpo === 'string' && nomeLimpo.trim() !== "") {
+              // 1. Limpeza básica de origens
+              nomeLimpo = nomeLimpo.replace("Delivery:", "").replace("Balcão:", "").trim();
+              
+              // 2. Se for da Mesa (ex: "Mesa 4 - Picolé de Uva"), pega só o nome do produto
+              if (nomeLimpo.includes(" - ")) {
+                nomeLimpo = nomeLimpo.split(" - ")[1].trim();
+              }
+              
+              // 3. Corta os adicionais ou observações (ex: "Açaí (1x Morango)")
+              nomeLimpo = nomeLimpo.split("(")[0].trim();
+              
+              // 🚀 A MÁGICA AQUI: Busca inteligente que ignora os emojis do carrinho!
+              // Ele procura se o nome oficial do banco está contido dentro do nome sujo do carrinho.
+              // O 'ORDER BY LENGTH DESC' impede que "Milk Shake" dê baixa na variação "Milk Shake Trufado".
+              const queryBusca = `
+                  SELECT id, estoque, ativo 
+                  FROM produtos 
+                  WHERE nome = $1 OR $2 ILIKE '%' || nome || '%' 
+                  ORDER BY LENGTH(nome) DESC 
+                  LIMIT 1
+              `;
+              
+              const prodQuery = await pool.query(queryBusca, [nomeLimpo, nomeLimpo]);
+              
+              if (prodQuery.rows.length > 0) {
+                let p = prodQuery.rows[0];
+                
+                // Só dá baixa se houver controle de estoque ativado (!== null) e saldo positivo
+                if (p.estoque !== null && p.estoque > 0) {
+                  let estoqueAtual = Number(p.estoque);
+                  let novoEstoque = estoqueAtual - qtd;
+                  let continuaAtivo = p.ativo;
+                  
+                  // Se zerar o estoque, ele bloqueia o produto no App/PDV automaticamente
+                  if (novoEstoque <= 0) {
+                    novoEstoque = 0;
+                    continuaAtivo = false; 
+                  }
+                  
+                  await pool.query("UPDATE produtos SET estoque = $1, ativo = $2 WHERE id = $3", [novoEstoque, continuaAtivo, p.id]);
+                  console.log(`📉 Estoque atualizado: ${p.id} | Novo saldo: ${novoEstoque}`);
+                }
+              } else {
+                  console.log(`⚠️ Aviso: Produto não encontrado para baixa de estoque: ${nomeLimpo}`);
+              }
+            }
           }
-          await pool.query("UPDATE produtos SET estoque = $1, ativo = $2 WHERE id = $3", [novoEstoque, continuaAtivo, p.id]);
+        } catch (erroEstoque) {
+          console.error("Aviso: Falha ao tentar dar baixa no estoque:", erroEstoque);
         }
-      }
-    }
-  }
-} catch (erroEstoque) {
-  console.error("Aviso: Falha ao tentar dar baixa no estoque:", erroEstoque);
-}
-// === FIM DO SISTEMA DE BAIXA DE ESTOQUE ===
+        // === FIM DO SISTEMA DE BAIXA DE ESTOQUE ===
 // Resposta de sucesso para liberar a tela do PDV (Isso havia sido apagado!)
         res.status(201).json({ sucesso: true });
 
