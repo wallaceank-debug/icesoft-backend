@@ -174,27 +174,35 @@ app.post('/api/vendas', async (req, res) => {
 
         // === INÍCIO DO SISTEMA DE BAIXA DE ESTOQUE ===
 try {
-  const itensComprados = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
+  let itensComprados = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
+  
   for (let item of itensComprados) {
-    const qtd = item.quantidade ? Number(item.quantidade) : 1;
+    let qtd = item.quantidade ? Number(item.quantidade) : 1;
+    let nomeLimpo = item.nome || item.produto_nome || item.nomeBase || "";
     
-    // 1. Extrair o nome bruto independente de onde a venda veio (PDV, App, Mesa)
-    let nomeBruto = typeof item === 'string' ? item : (item.nome || item.produto_nome || item.nomeBase || "");
-    
-    if (nomeBruto) {
-      // 2. Limpeza cirúrgica: Remove os prefixos do sistema e corta os adicionais (tudo após o parênteses)
-      let nomeLimpo = nomeBruto.replace(/(Balcão:|Delivery:|Mesa\s\d+\s?-)\s*/gi, '').split('(')[0].trim();
+    if (typeof nomeLimpo === 'string' && nomeLimpo.trim() !== "") {
+      // 1. Limpeza cirúrgica simples (sem uso de Regex)
+      nomeLimpo = nomeLimpo.replace("Delivery:", "").replace("Balcão:", "").trim();
       
-      // Procura o produto vendido no banco de dados com o nome exato
+      // 2. Se for da Mesa (ex: "Mesa 4 - Picolé de Uva"), pega só o nome do produto
+      if (nomeLimpo.includes(" - ")) {
+        nomeLimpo = nomeLimpo.split(" - ")[1].trim();
+      }
+      
+      // 3. Corta os adicionais (ex: "Açaí Dois Amores (1x Morango)")
+      nomeLimpo = nomeLimpo.split("(")[0].trim();
+      
+      // Procura o produto exato no banco de dados
       const prodQuery = await pool.query("SELECT id, estoque, ativo FROM produtos WHERE nome = $1 LIMIT 1", [nomeLimpo]);
+      
       if (prodQuery.rows.length > 0) {
         let p = prodQuery.rows[0];
-        // Só dá baixa se o produto tiver um número no estoque e ele for maior que zero
+        
+        // Só dá baixa se houver controle de estoque
         if (p.estoque !== null && p.estoque > 0) {
           let novoEstoque = p.estoque - qtd;
           let continuaAtivo = p.ativo;
           
-          // Regra de Ouro: Chegou a zero? Bloqueia a venda dele imediatamente.
           if (novoEstoque <= 0) {
             novoEstoque = 0;
             continuaAtivo = false; 
