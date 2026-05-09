@@ -177,10 +177,15 @@ try {
   const itensComprados = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
   for (let item of itensComprados) {
     const qtd = item.quantidade ? Number(item.quantidade) : 1;
-    const nomeLimpo = item.nome ? item.nome.replace('Delivery: ', '').trim() : '';
     
-    if (nomeLimpo) {
-      // Procura o produto vendido no banco de dados
+    // 1. Extrair o nome bruto independente de onde a venda veio (PDV, App, Mesa)
+    let nomeBruto = typeof item === 'string' ? item : (item.nome || item.produto_nome || item.nomeBase || "");
+    
+    if (nomeBruto) {
+      // 2. Limpeza cirúrgica: Remove os prefixos do sistema e corta os adicionais (tudo após o parênteses)
+      let nomeLimpo = nomeBruto.replace(/(Balcão:|Delivery:|Mesa\s\d+\s?-)\s*/gi, '').split('(')[0].trim();
+      
+      // Procura o produto vendido no banco de dados com o nome exato
       const prodQuery = await pool.query("SELECT id, estoque, ativo FROM produtos WHERE nome = $1 LIMIT 1", [nomeLimpo]);
       if (prodQuery.rows.length > 0) {
         let p = prodQuery.rows[0];
@@ -204,13 +209,6 @@ try {
 }
 // === FIM DO SISTEMA DE BAIXA DE ESTOQUE ===
         
-        res.status(201).json({ sucesso: true }); 
-    } catch (e) { 
-        console.error("Erro ao salvar venda:", e);
-        res.status(500).json({erro:"Erro ao salvar venda"}); 
-    }
-});
-
 // ==========================================
 // ROTA DE MUDANÇA DE STATUS + DISPARO DE WHATSAPP
 // ==========================================
