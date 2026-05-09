@@ -171,6 +171,39 @@ app.post('/api/vendas', async (req, res) => {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE)`, 
             [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario]
         ); 
+
+        // === INÍCIO DO SISTEMA DE BAIXA DE ESTOQUE ===
+try {
+  const itensComprados = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
+  for (let item of itensComprados) {
+    const qtd = item.quantidade ? Number(item.quantidade) : 1;
+    const nomeLimpo = item.nome ? item.nome.replace('Delivery: ', '').trim() : '';
+    
+    if (nomeLimpo) {
+      // Procura o produto vendido no banco de dados
+      const prodQuery = await pool.query("SELECT id, estoque, ativo FROM produtos WHERE nome = $1 LIMIT 1", [nomeLimpo]);
+      if (prodQuery.rows.length > 0) {
+        let p = prodQuery.rows[0];
+        // Só dá baixa se o produto tiver um número no estoque e ele for maior que zero
+        if (p.estoque !== null && p.estoque > 0) {
+          let novoEstoque = p.estoque - qtd;
+          let continuaAtivo = p.ativo;
+          
+          // Regra de Ouro: Chegou a zero? Bloqueia a venda dele imediatamente.
+          if (novoEstoque <= 0) {
+            novoEstoque = 0;
+            continuaAtivo = false; 
+          }
+          await pool.query("UPDATE produtos SET estoque = $1, ativo = $2 WHERE id = $3", [novoEstoque, continuaAtivo, p.id]);
+        }
+      }
+    }
+  }
+} catch (erroEstoque) {
+  console.error("Aviso: Falha ao tentar dar baixa no estoque:", erroEstoque);
+}
+// === FIM DO SISTEMA DE BAIXA DE ESTOQUE ===
+        
         res.status(201).json({ sucesso: true }); 
     } catch (e) { 
         console.error("Erro ao salvar venda:", e);
