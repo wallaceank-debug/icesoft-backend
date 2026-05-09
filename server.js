@@ -490,6 +490,20 @@ app.put('/api/mesas/:id', async (req, res) => { try { res.json((await pool.query
 app.delete('/api/mesas/:id', async (req, res) => { try { await pool.query('DELETE FROM mesas_ativas WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
 
 // ==========================================
+// ROTA DO ESTOQUE RÁPIDO
+// ==========================================
+app.put('/api/produtos/:id/estoque', async (req, res) => {
+  try {
+    const { estoque } = req.body;
+    await pool.query('UPDATE produtos SET estoque = $1 WHERE id = $2', [estoque, req.params.id]);
+    res.json({ sucesso: true });
+  } catch (e) {
+    console.error("Erro ao mudar estoque", e);
+    res.status(500).json({erro: "Erro ao alterar estoque."});
+  }
+});
+
+// ==========================================
 // DEMAIS ROTAS (Produtos, Configs, Bairros, etc)
 // ==========================================
 app.get('/api/status', (req, res) => res.json({ mensagem: "✅ Motor v5.0 pronto para Relatórios!" }));
