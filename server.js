@@ -216,6 +216,14 @@ try {
   console.error("Aviso: Falha ao tentar dar baixa no estoque:", erroEstoque);
 }
 // === FIM DO SISTEMA DE BAIXA DE ESTOQUE ===
+// Resposta de sucesso para liberar a tela do PDV (Isso havia sido apagado!)
+        res.status(201).json({ sucesso: true });
+
+    } catch (erroGeral) {
+        console.error("Erro ao registrar a venda:", erroGeral);
+        res.status(500).json({ erro: "Erro interno ao salvar a venda no banco de dados." });
+    }
+});
         
 // ==========================================
 // ROTA DE MUDANÇA DE STATUS + DISPARO DE WHATSAPP
