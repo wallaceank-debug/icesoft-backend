@@ -948,6 +948,28 @@ app.put('/api/produtos/:id/estoque', async (req, res) => {
   }
 });
 
+// ==========================================
+// 🚀 ROTA DO FUNIL DE VENDAS (RAIO-X DO CLIENTE)
+// ==========================================
+app.post('/api/funil', async (req, res) => {
+    try {
+        const { evento, produto_nome, sessao_id } = req.body;
+        
+        // Se não vier evento, nem tenta salvar
+        if (!evento) return res.status(400).json({ erro: "Evento não informado" });
+
+        await pool.query(
+            "INSERT INTO funil_eventos (evento, produto_nome, sessao_id) VALUES ($1, $2, $3)",
+            [evento, produto_nome || null, sessao_id || null]
+        );
+
+        res.status(201).json({ sucesso: true });
+    } catch (e) {
+        console.error("Erro ao registrar evento no funil:", e);
+        res.status(500).json({ erro: "Erro interno no funil" });
+    }
+});
+
 // Iniciando Servidor
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
