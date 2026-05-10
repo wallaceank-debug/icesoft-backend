@@ -139,6 +139,40 @@ pool.connect()
     .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
     .catch(err => console.error('❌ Erro no banco:', err));
 
+
+// ==========================================
+// 📊 ROTA PARA PUXAR OS DADOS DO FUNIL
+// ==========================================
+app.get('/api/relatorios/funil', async (req, res) => {
+    try {
+        // 1. Contagem de Visitantes Únicos (Baseado na Sessão)
+        const visitantes = await pool.query("SELECT COUNT(DISTINCT sessao_id) FROM funil_eventos WHERE evento = 'Visitou o Cardápio'");
+        
+        // 2. Contagem de Visualizações de Produtos
+        const visualizacoes = await pool.query("SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Visualizou Produto'");
+        
+        // 3. Contagem de Adições ao Carrinho
+        const carrinho = await pool.query("SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Adicionou ao Carrinho'");
+        
+        // 4. Contagem de Inícios de Checkout
+        const checkout = await pool.query("SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Iniciou Checkout'");
+        
+        // 5. Contagem de Vendas Reais (Pedidos que chegaram no seu sistema e não foram cancelados)
+        const vendas = await pool.query("SELECT COUNT(*) FROM vendas WHERE status != 'Cancelada' AND status != 'Cancelado'");
+
+        res.json({
+            visitantes: parseInt(visitantes.rows[0].count),
+            visualizacoes: parseInt(visualizacoes.rows[0].count),
+            carrinho: parseInt(carrinho.rows[0].count),
+            checkout: parseInt(checkout.rows[0].count),
+            vendas: parseInt(vendas.rows[0].count)
+        });
+    } catch (e) {
+        console.error("Erro ao gerar relatório do funil:", e);
+        res.status(500).json({ erro: "Erro ao calcular funil" });
+    }
+});
+
 // ==========================================
 // ROTA DE VENDAS (ATUALIZADA COM FILTRO DE DATA!)
 // ==========================================
