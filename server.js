@@ -126,6 +126,14 @@ pool.connect()
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS promo_inicio VARCHAR(10) DEFAULT '';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS promo_fim VARCHAR(10) DEFAULT '';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS estoque INTEGER DEFAULT NULL;
+
+            CREATE TABLE IF NOT EXISTS funil_eventos (
+                id SERIAL PRIMARY KEY,
+                evento VARCHAR(50) NOT NULL,
+                produto_nome VARCHAR(255),
+                sessao_id VARCHAR(100),
+                data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         `);
     })
     .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
