@@ -126,6 +126,7 @@ pool.connect()
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS promo_inicio VARCHAR(10) DEFAULT '';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS promo_fim VARCHAR(10) DEFAULT '';
             ALTER TABLE produtos ADD COLUMN IF NOT EXISTS estoque INTEGER DEFAULT NULL;
+            ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ordem INTEGER DEFAULT 0;
 
             CREATE TABLE IF NOT EXISTS funil_eventos (
                 id SERIAL PRIMARY KEY,
