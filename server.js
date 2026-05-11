@@ -596,7 +596,8 @@ app.put('/api/produtos/ordem', async (req, res) => {
 app.post('/api/produtos', async (req, res) => { 
     try { 
         res.json({ sucesso: true, produto: (await pool.query(
-            'INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, tag, tipo_promocao, valor_promocao, promo_dias, promo_inicio, promo_fim) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *', 
+            // 🐛 CORREÇÃO 1: Adicionado "promo_pdv" na lista e o "$15" no VALUES
+            'INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, tag, tipo_promocao, valor_promocao, promo_dias, promo_inicio, promo_fim, promo_pdv) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *', 
             [
                 req.body.nome, 
                 req.body.descricao, 
@@ -609,9 +610,9 @@ app.post('/api/produtos', async (req, res) => {
                 req.body.tag || '',
                 req.body.tipo_promocao || 'nenhuma', 
                 req.body.valor_promocao || 0,
-                req.body.promo_dias || '',     // 👈 NOVA INJEÇÃO AQUI
-                req.body.promo_inicio || '',   // 👈 NOVA INJEÇÃO AQUI
-                req.body.promo_fim || ''       // 👈 NOVA INJEÇÃO AQUI
+                req.body.promo_dias || '',     
+                req.body.promo_inicio || '',   
+                req.body.promo_fim || '',       // 🐛 CORREÇÃO 2: Vírgula adicionada aqui
                 req.body.promo_pdv || false
             ]
         )).rows[0] }); 
@@ -621,7 +622,8 @@ app.post('/api/produtos', async (req, res) => {
 app.put('/api/produtos/:id', async (req, res) => { 
     try { 
         res.json({ sucesso: true, produto: (await pool.query(
-            'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7, venda_por_peso = $8, tag = $9, tipo_promocao = $10, valor_promocao = $11, promo_dias = $12, promo_inicio = $13, promo_fim = $14 WHERE id = $15 RETURNING *', 
+            // 🐛 CORREÇÃO 3: Adicionado "promo_pdv = $15" e o ID virou "$16"
+            'UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7, venda_por_peso = $8, tag = $9, tipo_promocao = $10, valor_promocao = $11, promo_dias = $12, promo_inicio = $13, promo_fim = $14, promo_pdv = $15 WHERE id = $16 RETURNING *', 
             [
                 req.body.nome, 
                 req.body.descricao, 
@@ -634,15 +636,15 @@ app.put('/api/produtos/:id', async (req, res) => {
                 req.body.tag || '',
                 req.body.tipo_promocao || 'nenhuma', 
                 req.body.valor_promocao || 0,
-                req.body.promo_dias || '',     // 👈 NOVA INJEÇÃO AQUI
-                req.body.promo_inicio || '',   // 👈 NOVA INJEÇÃO AQUI
-                req.body.promo_fim || '',      // 👈 NOVA INJEÇÃO AQUI
+                req.body.promo_dias || '',     
+                req.body.promo_inicio || '',   
+                req.body.promo_fim || '',      
+                req.body.promo_pdv || false,    // 🐛 CORREÇÃO 4: Vírgula adicionada aqui
                 req.params.id
             ]
         )).rows[0] }); 
     } catch (e) { res.status(500).json({erro:"Erro ao atualizar produto"}); }
 });
-
 app.delete('/api/produtos/:id', async (req, res) => { try { await pool.query('DELETE FROM produtos WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/produtos/:id/status', async (req, res) => { try { await pool.query('UPDATE produtos SET ativo = $1 WHERE id = $2', [req.body.ativo, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
