@@ -749,7 +749,7 @@ app.get('/api/crm/clientes', async (req, res) => {
             FROM vendas
             WHERE cliente_telefone IS NOT NULL 
               AND TRIM(cliente_telefone) != '' 
-              AND status != 'Cancelada'
+              AND status != 'Cancelada' AND status != 'Cancelado'
             GROUP BY cliente_telefone
             ORDER BY ultima_compra DESC
         `;
