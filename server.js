@@ -577,6 +577,21 @@ app.put('/api/produtos/:id/estoque', async (req, res) => {
 app.get('/api/status', (req, res) => res.json({ mensagem: "✅ Motor v5.0 pronto para Relatórios!" }));
 app.get('/api/produtos', async (req, res) => { try { res.json((await pool.query('SELECT * FROM produtos ORDER BY ordem ASC, id ASC')).rows.map(p => ({...p, preco: parseFloat(p.preco)}))); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
+// ==========================================
+// ROTA PARA SALVAR A ORDEM DOS PRODUTOS
+// ==========================================
+app.put('/api/produtos/ordem', async (req, res) => {
+    try {
+        const produtos = req.body; 
+        for (let p of produtos) {
+            await pool.query('UPDATE produtos SET ordem = $1 WHERE id = $2', [p.ordem, p.id]);
+        }
+        res.json({ sucesso: true });
+    } catch (e) { 
+        res.status(500).json({erro: "Erro ao atualizar a ordem dos produtos"}); 
+    }
+});
+
 app.post('/api/produtos', async (req, res) => { 
     try { 
         res.json({ sucesso: true, produto: (await pool.query(
