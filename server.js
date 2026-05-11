@@ -612,6 +612,7 @@ app.post('/api/produtos', async (req, res) => {
                 req.body.promo_dias || '',     // 👈 NOVA INJEÇÃO AQUI
                 req.body.promo_inicio || '',   // 👈 NOVA INJEÇÃO AQUI
                 req.body.promo_fim || ''       // 👈 NOVA INJEÇÃO AQUI
+                req.body.promo_pdv || false
             ]
         )).rows[0] }); 
     } catch (e) { res.status(500).json({erro:"Erro ao salvar produto"}); }
