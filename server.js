@@ -1029,6 +1029,28 @@ app.post('/api/funil', async (req, res) => {
     }
 });
 
+// ==========================================
+// 🚨 ROTA TEMPORÁRIA: LIMPEZA DE PRÉ-LANÇAMENTO
+// ==========================================
+app.get('/api/reset-tudo-para-lancamento', async (req, res) => {
+    try {
+        // O comando TRUNCATE apaga todos os dados da tabela e zera os IDs (para o próximo pedido voltar a ser o #1)
+        // O CASCADE garante que apague tudo que está interligado (ex: itens da venda) sem dar erro
+        await pool.query(`
+            TRUNCATE TABLE vendas RESTART IDENTITY CASCADE;
+            TRUNCATE TABLE controle_caixa RESTART IDENTITY CASCADE;
+            TRUNCATE TABLE movimentacoes_caixa RESTART IDENTITY CASCADE;
+            TRUNCATE TABLE funil_eventos RESTART IDENTITY CASCADE;
+            TRUNCATE TABLE mesas_ativas RESTART IDENTITY CASCADE;
+        `);
+        
+        res.send("<h1 style='color: #25D366; font-family: sans-serif; text-align: center; margin-top: 50px;'>✅ Sucesso! Vendas, Caixas, Mesas e Funil foram zerados.<br><br>Você já pode apagar esse código do server.js e começar a vender! 🚀</h1>");
+    } catch (e) {
+        console.error("Erro na limpeza de lançamento:", e);
+        res.status(500).send("<h1 style='color: #f44336; font-family: sans-serif; text-align: center; margin-top: 50px;'>❌ Erro ao limpar o banco. Veja o console.</h1>");
+    }
+});
+
 // Iniciando Servidor
 const PORTA = process.env.PORT || 3000;
 app.listen(PORTA, () => {
