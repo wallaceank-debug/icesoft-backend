@@ -634,6 +634,9 @@ app.put('/api/grupos/:id', async (req, res) => { try { res.json({ sucesso: true,
 app.delete('/api/grupos/:id', async (req, res) => { try { await pool.query('DELETE FROM grupos_adicionais WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/grupos/:id/status', async (req, res) => { try { await pool.query('UPDATE grupos_adicionais SET ativo = $1 WHERE id = $2', [req.body.ativo, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
+// ==========================================
+// ROTAS DE CATEGORIAS (Corrigidas)
+// ==========================================
 app.get('/api/categorias', async (req, res) => { try { res.json((await pool.query('SELECT * FROM categorias ORDER BY ordem ASC, id ASC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.post('/api/categorias', async (req, res) => { 
     try { 
@@ -645,16 +648,7 @@ app.post('/api/categorias', async (req, res) => {
 });
 app.delete('/api/categorias/:id', async (req, res) => { try { await pool.query('DELETE FROM categorias WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
-app.put('/api/categorias/:id', async (req, res) => { 
-    try { 
-        const mostrar = req.body.mostrar_cardapio !== false;
-        await pool.query('UPDATE categorias SET mostrar_cardapio = $1 WHERE id = $2', [mostrar, req.params.id]); 
-        res.json({ sucesso: true }); 
-    } catch (e) { 
-        res.status(500).json({erro:"Erro ao atualizar categoria"}); 
-    }
-});
-
+// ⚠️ ROTA DE ORDEM PRECISA FICAR ANTES DO :ID
 app.put('/api/categorias/ordem', async (req, res) => {
     try {
         const categorias = req.body; 
@@ -664,6 +658,17 @@ app.put('/api/categorias/ordem', async (req, res) => {
         res.json({ sucesso: true });
     } catch (e) { 
         res.status(500).json({erro: "Erro ao atualizar a ordem das categorias"}); 
+    }
+});
+
+// ⚠️ ROTA DE :ID VEM DEPOIS (Atualizar visibilidade)
+app.put('/api/categorias/:id', async (req, res) => { 
+    try { 
+        const mostrar = req.body.mostrar_cardapio !== false;
+        await pool.query('UPDATE categorias SET mostrar_cardapio = $1 WHERE id = $2', [mostrar, req.params.id]); 
+        res.json({ sucesso: true }); 
+    } catch (e) { 
+        res.status(500).json({erro:"Erro ao atualizar categoria"}); 
     }
 });
 
