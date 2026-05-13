@@ -143,24 +143,39 @@ pool.connect()
 
 
 // ==========================================
-// 📊 ROTA PARA PUXAR OS DADOS DO FUNIL
+// 📊 ROTA PARA PUXAR OS DADOS DO FUNIL (COM FILTRO DE DATAS)
 // ==========================================
 app.get('/api/relatorios/funil', async (req, res) => {
     try {
-        // 1. Contagem de Visitantes Únicos (Baseado na Sessão)
-        const visitantes = await pool.query("SELECT COUNT(DISTINCT sessao_id) FROM funil_eventos WHERE evento = 'Visitou o Cardápio'");
+        const { inicio, fim } = req.query;
+        let filtroSQL = '';
+        let params = [];
+
+        // Se o painel enviar as datas, a gente cria a regra para o banco de dados
+        if (inicio && fim) {
+            filtroSQL = " AND data_hora::date BETWEEN $1 AND $2";
+            params = [inicio, fim];
+        }
+
+        // 1. Visitantes Únicos
+        const qVisitantes = `SELECT COUNT(DISTINCT sessao_id) FROM funil_eventos WHERE evento = 'Visitou o Cardápio'${filtroSQL}`;
+        const visitantes = await pool.query(qVisitantes, params);
         
-        // 2. Contagem de Visualizações de Produtos
-        const visualizacoes = await pool.query("SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Visualizou Produto'");
+        // 2. Visualizações de Produtos
+        const qVis = `SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Visualizou Produto'${filtroSQL}`;
+        const visualizacoes = await pool.query(qVis, params);
         
-        // 3. Contagem de Adições ao Carrinho
-        const carrinho = await pool.query("SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Adicionou ao Carrinho'");
+        // 3. Adições ao Carrinho
+        const qCar = `SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Adicionou ao Carrinho'${filtroSQL}`;
+        const carrinho = await pool.query(qCar, params);
         
-        // 4. Contagem de Inícios de Checkout
-        const checkout = await pool.query("SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Iniciou Checkout'");
+        // 4. Inícios de Checkout
+        const qCheck = `SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Iniciou Checkout'${filtroSQL}`;
+        const checkout = await pool.query(qCheck, params);
         
-        // 5. Contagem de Vendas Reais (Pedidos que chegaram no seu sistema e não foram cancelados)
-        const vendas = await pool.query("SELECT COUNT(*) FROM vendas WHERE status != 'Cancelada' AND status != 'Cancelado'");
+        // 5. Vendas Reais (Pedidos que não foram cancelados)
+        const qVendas = `SELECT COUNT(*) FROM vendas WHERE status NOT ILIKE '%cancelad%'${filtroSQL}`;
+        const vendas = await pool.query(qVendas, params);
 
         res.json({
             visitantes: parseInt(visitantes.rows[0].count),
