@@ -1124,65 +1124,96 @@ app.post('/api/funil', async (req, res) => {
 const conversasAtivas = new Map(); // Memória anti-spam do robô
 
 app.post('/api/whatsapp/webhook', async (req, res) => {
-    // ⚠️ Importante: O webhook precisa de uma resposta rápida 200 OK para não travar a Evolution
+    // ⚠️ Importante: O webhook precisa de uma resposta rápida 200 OK para não travar a Evolution API
     res.status(200).send('OK');
     
     try {
         const payload = req.body;
         
-        if (payload.event === 'messages.upsert') {
-            const data = payload.data;
-            
-            // 🐛 CORREÇÃO AQUI: Na Evolution API, a "key" e o "pushName" ficam direto no data!
-            if (!data || !data.key || data.key.fromMe) return; 
-            
-            const remoteJid = data.key.remoteJid;
-            
-            // Ignorar grupos (@g.us) e mensagens de status
-            if (!remoteJid || remoteJid.includes('@g.us') || remoteJid === 'status@broadcast') return;
+        // 1. Verifica se o evento é de mensagem recebida (ignora maiúsculas/minúsculas)
+        if (!payload.event || payload.event.toUpperCase() !== 'MESSAGES_UPSERT') return;
+        
+        // 2. A Evolution pode mandar os dados como Array ou Objeto, vamos tratar os dois
+        let msgData = Array.isArray(payload.data) ? payload.data[0] : payload.data;
+        
+        if (!msgData || !msgData.key) return; 
+        
+        // 3. Ignorar mensagens que a própria loja enviou (Senão o robô fala sozinho)
+        if (msgData.key.fromMe) return; 
 
-            const agora = Date.now();
-            const ultimaMensagem = conversasAtivas.get(remoteJid) || 0;
-            
-            // 🛡️ TRAVA ANTI-SPAM: Se ele recebeu uma saudação nas últimas 2 horas, NÃO envia de novo.
-            if (agora - ultimaMensagem < 2 * 60 * 60 * 1000) {
-                conversasAtivas.set(remoteJid, agora); 
-                return; 
-            }
+        const remoteJid = msgData.key.remoteJid;
+        
+        // 4. Ignorar Grupos e Status
+        if (!remoteJid || remoteJid.includes('@g.us') || remoteJid === 'status@broadcast') {
+            return; // Silencioso para não poluir os logs
+        }
 
-            // Marca que a pessoa começou uma nova conversa agora
-            conversasAtivas.set(remoteJid, agora);
+        // 5. 🛑 O FILTRO DE TEXTO: Garantir que a pessoa mandou um texto real
+        const mensagemConteudo = msgData.message;
+        if (!mensagemConteudo) return; 
+        
+        // Verifica se existe texto normal ou texto respondendo outra mensagem
+        const temTexto = mensagemConteudo.conversation || 
+                         (mensagemConteudo.extendedTextMessage && mensagemConteudo.extendedTextMessage.text);
+                         
+        if (!temTexto) {
+            console.log(`🙈 Robô ignorou um áudio/figurinha/imagem de: ${remoteJid}`);
+            return; 
+        }
 
-            // Busca os textos salvos no banco
-            const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
-            const config = configQuery.rows[0];
+        console.log(`💬 WEBHOOK RECEBEU TEXTO DE: ${remoteJid}`);
 
-            if (config && config.msg_boas_vindas && config.msg_boas_vindas.trim() !== '' && config.zap_url && config.zap_key && config.zap_instancia) {
-                // Pega o nome do WhatsApp da pessoa (pushName)
-                const nomeCliente = data.pushName || 'Cliente';
-                const textoResposta = config.msg_boas_vindas.replace(/{nome}/g, nomeCliente);
+        const agora = Date.now();
+        const ultimaMensagem = conversasAtivas.get(remoteJid) || 0;
+        
+        // 6. 🛡️ TRAVA ANTI-SPAM (2 Horas)
+        if (agora - ultimaMensagem < 2 * 60 * 60 * 1000) {
+            console.log(`⏳ Cliente ${remoteJid} já recebeu saudação há pouco tempo. Silenciando robô.`);
+            conversasAtivas.set(remoteJid, agora); // Atualiza o tempo para ele continuar quieto se o cliente continuar conversando
+            return; 
+        }
 
-                const url = config.zap_url.trim().replace(/\/$/, "");
-                const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
+        // 7. Marca que a conversa começou
+        conversasAtivas.set(remoteJid, agora);
 
-                // Pequeno "delay" de 2 segundos para o robô parecer que está digitando humanamente
-                setTimeout(() => {
-                    fetch(`${url}/message/sendText/${instanciaURL}`, {
-                        method: 'POST',
-                        headers: {
-                            'apikey': config.zap_key.trim(),
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            number: remoteJid,
-                            text: textoResposta
-                        })
-                    }).catch(err => console.error("⚠️ Falha ao enviar saudação:", err.message));
-                }, 2000);
-            }
+        // 8. Busca os textos salvos no banco
+        const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
+        const config = configQuery.rows[0];
+
+        if (config && config.msg_boas_vindas && config.msg_boas_vindas.trim() !== '') {
+            const nomeCliente = msgData.pushName || 'Cliente';
+            const textoResposta = config.msg_boas_vindas.replace(/{nome}/g, nomeCliente);
+
+            const url = config.zap_url.trim().replace(/\/$/, "");
+            const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
+
+            console.log(`✅ Robô ativado! Enviando saudação para ${nomeCliente} (${remoteJid})...`);
+
+            // Pequeno "delay" de 2 segundos para parecer que o robô está digitando
+            setTimeout(() => {
+                fetch(`${url}/message/sendText/${instanciaURL}`, {
+                    method: 'POST',
+                    headers: {
+                        'apikey': config.zap_key.trim(),
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        number: remoteJid,
+                        text: textoResposta
+                    })
+                })
+                .then(r => r.json())
+                .then(resultado => {
+                    if (resultado.key) console.log(`🚀 Saudação enviada com sucesso para ${nomeCliente}!`);
+                    else console.log(`⚠️ Resultado estranho do envio:`, resultado);
+                })
+                .catch(err => console.error("⚠️ Falha de conexão ao enviar saudação:", err.message));
+            }, 2000);
+        } else {
+            console.log("⚠️ O robô quis responder, mas a mensagem de Boas-Vindas está vazia no painel.");
         }
     } catch (e) {
-        console.error("Erro no Webhook do WhatsApp:", e);
+        console.error("❌ Erro grave no Webhook do WhatsApp:", e);
     }
 });
 
