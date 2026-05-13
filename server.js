@@ -292,6 +292,32 @@ app.post('/api/vendas', async (req, res) => {
           console.error("❌ Erro fatal ao tentar dar baixa no estoque:", erroEstoque);
         }
         // === FIM DO SISTEMA DE BAIXA DE ESTOQUE ===
+        // === 🚀 NOVO: DISPARO IMEDIATO DA MENSAGEM DE "PEDIDO RECEBIDO / EM ANÁLISE" ===
+        if (cliente_telefone && cliente_telefone.trim() !== '') {
+            try {
+                const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
+                const config = configQuery.rows[0];
+
+                if (config && config.msg_recebido && config.msg_recebido.trim() !== '' && config.zap_url && config.zap_key && config.zap_instancia) {
+                    const primeiroNome = cliente_nome ? cliente_nome.split(' ')[0] : 'Cliente';
+                    const textoPronto = config.msg_recebido
+                        .replace(/{nome}/g, primeiroNome)
+                        .replace(/{pedido}/g, numeroDiario || 'Novo');
+
+                    const telefoneLimpo = "55" + cliente_telefone.replace(/\D/g, '');
+                    const urlZap = config.zap_url.trim().replace(/\/$/, "");
+                    const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
+
+                    fetch(`${urlZap}/message/sendText/${instanciaURL}`, {
+                        method: 'POST',
+                        headers: { 'apikey': config.zap_key.trim(), 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ number: telefoneLimpo, text: textoPronto })
+                    }).catch(err => console.log("⚠️ Erro msg recebido (Silenciado):", err.message));
+                }
+            } catch (errZap) {
+                console.error("Erro ao disparar msg de pedido recebido", errZap);
+            }
+        }
 // Resposta de sucesso para liberar a tela do PDV (Isso havia sido apagado!)
         res.status(201).json({ sucesso: true });
 
