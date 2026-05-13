@@ -944,7 +944,25 @@ app.get('/api/whatsapp/qrcode', async (req, res) => {
                 return res.json({ status: 'CONECTADO', mensagem: 'O WhatsApp já está conectado!' });
             }
         }
-
+        
+        // 👇 NOVO: CONFIGURANDO O WEBHOOK (OUVIDO DO ROBÔ) AUTOMATICAMENTE
+        try {
+            const webhookUrl = "https://icesoft-sistema-icesoft-api-v2.tm3i9u.easypanel.host/api/whatsapp/webhook";
+            await fetch(`${url}/webhook/set/${instanciaURL}`, {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({
+                    url: webhookUrl,
+                    webhookByEvents: false,
+                    webhookBase64: false,
+                    events: ["MESSAGES_UPSERT"]
+                })
+            });
+            console.log("🔗 Webhook do WhatsApp configurado com sucesso na Evolution!");
+        } catch(ew) {
+            console.error("Aviso: Falha ao setar o webhook. Tente novamente.", ew);
+        }
+        
         const resQr = await fetch(`${url}/instance/connect/${instanciaURL}`, { headers });
         const dataQr = await resQr.json();
 
