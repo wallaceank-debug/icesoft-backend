@@ -151,7 +151,6 @@ app.get('/api/relatorios/funil', async (req, res) => {
         let filtroSQL = '';
         let params = [];
 
-        // Se o painel enviar as datas, a gente cria a regra para o banco de dados
         if (inicio && fim) {
             filtroSQL = " AND data_hora::date BETWEEN $1 AND $2";
             params = [inicio, fim];
@@ -173,8 +172,15 @@ app.get('/api/relatorios/funil', async (req, res) => {
         const qCheck = `SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Iniciou Checkout'${filtroSQL}`;
         const checkout = await pool.query(qCheck, params);
         
-        // 5. Vendas Reais (Pedidos que não foram cancelados)
-        const qVendas = `SELECT COUNT(*) FROM vendas WHERE status NOT ILIKE '%cancelad%'${filtroSQL}`;
+        // 5. Vendas Reais (Apenas Online - Ignora PDV)
+        const qVendas = `
+            SELECT COUNT(*) 
+            FROM vendas 
+            WHERE status NOT ILIKE '%cancelad%' 
+              AND origem NOT ILIKE '%Balcão%' 
+              AND origem NOT ILIKE '%WhatsApp / Telefone%'
+              ${filtroSQL}
+        `;
         const vendas = await pool.query(qVendas, params);
 
         res.json({
