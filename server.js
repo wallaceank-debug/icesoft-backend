@@ -822,6 +822,7 @@ pool.query(`
         msg_concluido TEXT
     );
 `).then(async () => {
+    await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS msg_recebido TEXT');
     const { rowCount } = await pool.query('SELECT * FROM integracoes_config');
     if (rowCount === 0) {
         await pool.query('INSERT INTO integracoes_config (zap_instancia) VALUES ($1)', ['IcesoftBot']);
