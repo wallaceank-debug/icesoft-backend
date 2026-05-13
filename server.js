@@ -1121,7 +1121,7 @@ app.post('/api/funil', async (req, res) => {
 // ==========================================
 // 🎧 WEBHOOK: OUVINDO E RESPONDENDO (MENSAGEM DE BOAS VINDAS)
 // ==========================================
-const conversasAtivas = new Map(); // Memória anti-spam do robô (Guarda quem já recebeu o "Olá")
+const conversasAtivas = new Map(); // Memória anti-spam do robô
 
 app.post('/api/whatsapp/webhook', async (req, res) => {
     // ⚠️ Importante: O webhook precisa de uma resposta rápida 200 OK para não travar a Evolution
@@ -1131,13 +1131,14 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
         const payload = req.body;
         
         if (payload.event === 'messages.upsert') {
-            const msg = payload.data.message;
+            const data = payload.data;
             
-            // Ignorar se a mensagem foi enviada por nós mesmos ou se veio vazia
-            if (!msg || !msg.key || msg.key.fromMe) return; 
+            // 🐛 CORREÇÃO AQUI: Na Evolution API, a "key" e o "pushName" ficam direto no data!
+            if (!data || !data.key || data.key.fromMe) return; 
             
-            const remoteJid = msg.key.remoteJid;
-            // Ignorar grupos e mensagens de status
+            const remoteJid = data.key.remoteJid;
+            
+            // Ignorar grupos (@g.us) e mensagens de status
             if (!remoteJid || remoteJid.includes('@g.us') || remoteJid === 'status@broadcast') return;
 
             const agora = Date.now();
@@ -1145,7 +1146,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
             
             // 🛡️ TRAVA ANTI-SPAM: Se ele recebeu uma saudação nas últimas 2 horas, NÃO envia de novo.
             if (agora - ultimaMensagem < 2 * 60 * 60 * 1000) {
-                conversasAtivas.set(remoteJid, agora); // Apenas renova o tempo da conversa ativa
+                conversasAtivas.set(remoteJid, agora); 
                 return; 
             }
 
@@ -1157,7 +1158,8 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
             const config = configQuery.rows[0];
 
             if (config && config.msg_boas_vindas && config.msg_boas_vindas.trim() !== '' && config.zap_url && config.zap_key && config.zap_instancia) {
-                const nomeCliente = msg.pushName || 'Cliente';
+                // Pega o nome do WhatsApp da pessoa (pushName)
+                const nomeCliente = data.pushName || 'Cliente';
                 const textoResposta = config.msg_boas_vindas.replace(/{nome}/g, nomeCliente);
 
                 const url = config.zap_url.trim().replace(/\/$/, "");
