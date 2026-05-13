@@ -444,12 +444,35 @@ app.get('/api/caixa/resumo/:id', async (req, res) => {
     try {
         const caixa = (await pool.query('SELECT * FROM controle_caixa WHERE id = $1', [req.params.id])).rows[0];
         if (!caixa) return res.status(404).json({ erro: "Caixa não encontrado" });
-        const vendasDinheiro = parseFloat((await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total_vendas FROM vendas WHERE LOWER(TRIM(forma_pagamento)) = 'dinheiro' AND data_hora >= $1`, [caixa.data_abertura])).rows[0].total_vendas) || 0;
+        
+        // 🐛 CORREÇÃO AQUI: Troca de "= 'dinheiro'" para "ILIKE '%dinheiro%'" e ignora vendas Canceladas!
+        const queryVendas = `
+            SELECT COALESCE(SUM(valor_total), 0) as total_vendas 
+            FROM vendas 
+            WHERE forma_pagamento ILIKE '%dinheiro%' 
+              AND status NOT ILIKE '%cancelad%'
+              AND data_hora >= $1
+        `;
+        const vendasDinheiro = parseFloat((await pool.query(queryVendas, [caixa.data_abertura])).rows[0].total_vendas) || 0;
+        
         const movs = (await pool.query(`SELECT tipo, COALESCE(SUM(valor), 0) as total FROM movimentacoes_caixa WHERE caixa_id = $1 GROUP BY tipo`, [req.params.id])).rows;
+        
         let suprimentos = 0, sangrias = 0;
-        movs.forEach(r => { if (r.tipo === 'Suprimento') suprimentos = parseFloat(r.total); if (r.tipo === 'Sangria') sangrias = parseFloat(r.total); });
-        res.json({ fundo: parseFloat(caixa.valor_inicial) || 0, vendas_dinheiro: vendasDinheiro, suprimentos, sangrias, esperado: (parseFloat(caixa.valor_inicial) || 0) + vendasDinheiro + suprimentos - sangrias });
-    } catch (e) { res.status(500).json({ erro: "Erro Técnico" }); }
+        movs.forEach(r => { 
+            if (r.tipo === 'Suprimento') suprimentos = parseFloat(r.total); 
+            if (r.tipo === 'Sangria') sangrias = parseFloat(r.total); 
+        });
+        
+        res.json({ 
+            fundo: parseFloat(caixa.valor_inicial) || 0, 
+            vendas_dinheiro: vendasDinheiro, 
+            suprimentos, 
+            sangrias, 
+            esperado: (parseFloat(caixa.valor_inicial) || 0) + vendasDinheiro + suprimentos - sangrias 
+        });
+    } catch (e) { 
+        res.status(500).json({ erro: "Erro Técnico" }); 
+    }
 });
 
 // ==========================================
