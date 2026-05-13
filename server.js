@@ -3,6 +3,8 @@
 // ==========================================
 const express = require('express');
 const cors = require('cors');
+const http = require('http'); // <-- NOVO
+const { Server } = require('socket.io'); // <-- NOVO
 const { Pool } = require('pg');
 const multer = require('multer');
 const path = require('path');
@@ -10,6 +12,25 @@ const fs = require('fs');
 const sharp = require('sharp'); 
 
 const app = express();
+// 1. Cria o servidor HTTP do Node encapsulando o Express
+const server = http.createServer(app);
+
+// 2. Acopla o Socket.IO ao servidor HTTP
+const io = new Server(server, {
+    cors: {
+        origin: '*', // Permite que qualquer app (como nosso Electron) se conecte
+        methods: ['GET', 'POST']
+    }
+});
+
+// 3. Monitora quem se conecta no 'Rádio'
+io.on('connection', (socket) => {
+    console.log(`🔌 Novo dispositivo conectado no Kanban: ${socket.id}`);
+
+    socket.on('disconnect', () => {
+         console.log(`❌ Dispositivo desconectado: ${socket.id}`);
+    });
+});
 
 app.use(cors({
     origin: '*', 
@@ -132,6 +153,13 @@ app.post('/api/vendas', async (req, res) => {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE)`, 
             [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario]
         ); 
+
+        // Avisa todos os dispositivos conectados que tem pedido novo!
+        io.emit('novo_pedido_kanban', { 
+            id: numeroDiario, 
+            cliente: cliente_nome, 
+            status: status || 'Concluída' 
+        });
 
         try {
           let itensComprados = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
@@ -586,4 +614,4 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 });
 
 const PORTA = process.env.PORT || 3000;
-app.listen(PORTA, () => console.log(`🚀 Servidor Icesoft v5.0 na porta ${PORTA}!`));
+server.listen(PORTA, () => console.log(`🚀 Servidor Icesoft v5.0 (com WebSockets) na porta ${PORTA}!`));
