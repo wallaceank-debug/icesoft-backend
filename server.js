@@ -124,7 +124,8 @@ app.get('/api/relatorios/funil', async (req, res) => {
         const visualizacoes = await pool.query(`SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Visualizou Produto'${filtroSQL}`, params);
         const carrinho = await pool.query(`SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Adicionou ao Carrinho'${filtroSQL}`, params);
         const checkout = await pool.query(`SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Iniciou Checkout'${filtroSQL}`, params);
-        const vendas = await pool.query(`SELECT COUNT(*) FROM vendas WHERE status NOT ILIKE '%cancelad%' AND origem NOT ILIKE '%Balcão%' AND origem NOT ILIKE '%WhatsApp / Telefone%' ${filtroSQL}`, params);
+       // 5. Vendas Reais (Apenas Online - Ignora PDV e Mesas)
+        const vendas = await pool.query(`SELECT COUNT(*) FROM vendas WHERE status NOT ILIKE '%cancelad%' AND origem NOT ILIKE '%Balcão%' AND origem NOT ILIKE '%WhatsApp / Telefone%' AND origem NOT ILIKE '%Mesas%' ${filtroSQL}`, params);
         res.json({ visitantes: parseInt(visitantes.rows[0].count), visualizacoes: parseInt(visualizacoes.rows[0].count), carrinho: parseInt(carrinho.rows[0].count), checkout: parseInt(checkout.rows[0].count), vendas: parseInt(vendas.rows[0].count) });
     } catch (e) { res.status(500).json({ erro: "Erro ao calcular funil" }); }
 });
