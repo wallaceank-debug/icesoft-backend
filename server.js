@@ -262,6 +262,20 @@ app.put('/api/vendas/:id/status', async (req, res) => {
     } catch (e) { console.error("Erro status:", e); }
 });
 
+// ==========================================
+// 💳 NOVA ROTA: ATUALIZAR FORMA DE PAGAMENTO
+// ==========================================
+app.put('/api/vendas/:id/pagamento', async (req, res) => {
+    try {
+        const { forma_pagamento } = req.body;
+        await pool.query("UPDATE vendas SET forma_pagamento = $1 WHERE id = $2", [forma_pagamento, req.params.id]);
+        res.json({ sucesso: true });
+    } catch (e) {
+        console.error("Erro ao atualizar pagamento:", e);
+        res.status(500).json({ erro: "Erro ao atualizar pagamento" });
+    }
+});
+
 app.post('/api/login', async (req, res) => {
     try {
         const resultado = await pool.query('SELECT * FROM usuarios WHERE (username = $1 OR email = $1) AND senha = $2', [req.body.username, req.body.senha]);
