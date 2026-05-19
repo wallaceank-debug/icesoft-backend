@@ -376,12 +376,47 @@ app.put('/api/configuracoes', async (req, res) => { try { for (let chave of Obje
 
 app.get('/api/crm/clientes', async (req, res) => {
     try {
-        res.json((await pool.query(`
-            SELECT cliente_telefone AS telefone, MAX(cliente_nome) AS nome, COUNT(*) AS total_pedidos, SUM(valor_total) AS total_gasto, MAX(data_hora) AS ultima_compra
-            FROM vendas WHERE cliente_telefone IS NOT NULL AND TRIM(cliente_telefone) != '' AND status != 'Cancelada' AND status != 'Cancelado'
-            GROUP BY cliente_telefone ORDER BY ultima_compra DESC
-        `)).rows);
-    } catch (erro) { res.status(500).json({ erro: "Erro" }); }
+        const queryInteligente = `
+            WITH cliente_base AS (
+                SELECT 
+                    cliente_telefone AS telefone, 
+                    MAX(cliente_nome) AS nome, 
+                    COUNT(*) AS total_pedidos, 
+                    SUM(valor_total) AS total_gasto, 
+                    MAX(data_hora) AS ultima_compra
+                FROM vendas 
+                WHERE cliente_telefone IS NOT NULL AND TRIM(cliente_telefone) != '' AND status != 'Cancelada' AND status != 'Cancelado'
+                GROUP BY cliente_telefone
+            ),
+            contagem_produtos AS (
+                SELECT 
+                    v.cliente_telefone AS telefone,
+                    item->>'nome' AS nome_produto,
+                    COUNT(*) AS total_vezes,
+                    ROW_NUMBER() OVER (PARTITION BY v.cliente_telefone ORDER BY COUNT(*) DESC, item->>'nome' ASC) as rank_favorito
+                FROM vendas v,
+                jsonb_array_elements(v.itens) AS item
+                WHERE v.cliente_telefone IS NOT NULL AND TRIM(v.cliente_telefone) != '' AND v.status != 'Cancelada' AND v.status != 'Cancelado'
+                GROUP BY v.cliente_telefone, item->>'nome'
+            )
+            SELECT 
+                cb.telefone, 
+                cb.nome, 
+                cb.total_pedidos, 
+                cb.total_gasto, 
+                cb.ultima_compra,
+                COALESCE(cp.nome_produto, 'Diversos') AS produto_favorito
+            FROM cliente_base cb
+            LEFT JOIN contagem_produtos cp ON cb.telefone = cp.telefone AND cp.rank_favorito = 1
+            ORDER BY cb.ultima_compra DESC
+        `;
+        
+        const resultado = await pool.query(queryInteligente);
+        res.json(resultado.rows);
+    } catch (erro) { 
+        console.error("❌ Erro ao processar produtos favoritos no CRM:", erro);
+        res.status(500).json({ erro: "Erro ao carregar inteligência de clientes." }); 
+    }
 });
 
 pool.query(`
