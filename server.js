@@ -394,8 +394,10 @@ app.get('/api/crm/clientes', async (req, res) => {
                     item->>'nome' AS nome_produto,
                     COUNT(*) AS total_vezes,
                     ROW_NUMBER() OVER (PARTITION BY v.cliente_telefone ORDER BY COUNT(*) DESC, item->>'nome' ASC) as rank_favorito
-                FROM vendas v,
-                jsonb_array_elements(v.itens) AS item
+                FROM vendas v
+                CROSS JOIN LATERAL jsonb_array_elements(
+                    CASE WHEN jsonb_typeof(v.itens) = 'array' THEN v.itens ELSE '[]'::jsonb END
+                ) AS item
                 WHERE v.cliente_telefone IS NOT NULL AND TRIM(v.cliente_telefone) != '' AND v.status != 'Cancelada' AND v.status != 'Cancelado'
                 GROUP BY v.cliente_telefone, item->>'nome'
             )
