@@ -665,5 +665,41 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
     }
 });
 
+// ==========================================
+// 🚀 ROTA: DISPARO MANUAL DE MARKETING (CRM)
+// ==========================================
+app.post('/api/whatsapp/disparo-manual', async (req, res) => {
+    try {
+        const { telefone, mensagem } = req.body;
+        if (!telefone || !mensagem) return res.status(400).json({ erro: "Telefone e mensagem são obrigatórios." });
+
+        const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
+        const config = configQuery.rows[0];
+
+        if (!config || !config.zap_url || !config.zap_key || !config.zap_instancia) {
+            return res.status(400).json({ erro: "WhatsApp não configurado no sistema." });
+        }
+
+        // Limpa o número e prepara para a Evolution API
+        const telefoneLimpo = "55" + String(telefone).replace(/\D/g, '');
+        const url = config.zap_url.trim().replace(/\/$/, "");
+        const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
+
+        // Dispara a mensagem
+        const response = await fetch(`${url}/message/sendText/${instanciaURL}`, {
+            method: 'POST',
+            headers: { 'apikey': config.zap_key.trim(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ number: telefoneLimpo, text: mensagem })
+        });
+
+        if (!response.ok) throw new Error("A Evolution API recusou o envio.");
+
+        res.json({ sucesso: true });
+    } catch (erro) {
+        console.error("❌ Erro no disparo manual:", erro);
+        res.status(500).json({ erro: "Falha de rede ao tentar enviar a mensagem." });
+    }
+});
+
 const PORTA = process.env.PORT || 3000;
 server.listen(PORTA, () => console.log(`🚀 Servidor Icesoft v5.0 (com WebSockets) na porta ${PORTA}!`));
