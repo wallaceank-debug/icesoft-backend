@@ -130,6 +130,33 @@ app.get('/api/relatorios/funil', async (req, res) => {
     } catch (e) { res.status(500).json({ erro: "Erro ao calcular funil" }); }
 });
 
+// ==========================================
+// 📊 NOVO ENDPOINT: RAIO-X DE PRODUTOS
+// ==========================================
+app.get('/api/relatorios/raiox-produtos', async (req, res) => {
+    try {
+        const { inicio, fim } = req.query;
+        let filtroSQL = ''; let params = [];
+        if (inicio && fim) { 
+            filtroSQL = " AND data_hora::date BETWEEN $1 AND $2"; 
+            params = [inicio, fim]; 
+        }
+
+        // Puxa quantas vezes cada produto foi visualizado na tela do cliente
+        const visitas = await pool.query(`
+            SELECT produto_nome, COUNT(*) as visitas 
+            FROM funil_eventos 
+            WHERE evento = 'Visualizou Produto' AND produto_nome IS NOT NULL ${filtroSQL} 
+            GROUP BY produto_nome
+        `, params);
+
+        res.json({ visitas: visitas.rows });
+    } catch (e) { 
+        console.error("Erro no Raio-X:", e);
+        res.status(500).json({ erro: "Erro ao calcular visitas por produto" }); 
+    }
+});
+
 app.get('/api/vendas', async (req, res) => {
     try {
         const { inicio, fim } = req.query;
