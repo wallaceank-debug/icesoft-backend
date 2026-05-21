@@ -272,6 +272,39 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                         if (venda.cliente_endereco && !venda.cliente_endereco.includes('Retirada')) resumo += `\n*📍 Entrega:* ${venda.cliente_endereco}`;
                         else resumo += `\n*🏬 Retirada na Loja*`;
                         if (venda.observacoes && venda.observacoes.trim() !== '') resumo += `\n*📝 Obs:* ${venda.observacoes}`;
+
+                        // ==========================================
+                        // 🟢 INÍCIO DA MÁGICA DA FIDELIDADE
+                        // ==========================================
+                        try {
+                            // Conta quantos pedidos válidos esse número já fez na loja
+                            const countQuery = await pool.query("SELECT COUNT(*) FROM vendas WHERE cliente_telefone = $1 AND status NOT ILIKE '%cancelad%'", [venda.cliente_telefone]);
+                            let pontosTotais = parseInt(countQuery.rows[0].count) || 1;
+                            let metaFidelidade = 10; // 🎯 Defina a meta aqui (10 pedidos)
+                            
+                            // Matemática inteligente: se ele tem 13 pontos, ele está no pedido 3 da cartela nova.
+                            let pontosAtuais = pontosTotais % metaFidelidade; 
+                            // Se bater exatos 10, 20, 30... a conta acima dá zero, então forçamos a mostrar a barra cheia (10)
+                            if (pontosAtuais === 0 && pontosTotais > 0) pontosAtuais = metaFidelidade;
+
+                            // Desenha as bolinhas automaticamente
+                            let bolinhasVerdes = '🟢'.repeat(pontosAtuais);
+                            let bolinhasVermelhas = '🔴'.repeat(metaFidelidade - pontosAtuais);
+
+                            resumo += `\n\n🎁 *Seu Progresso de Fidelidade:*\n${bolinhasVerdes}${bolinhasVermelhas}\n`;
+                            
+                            if (pontosAtuais === metaFidelidade) {
+                                resumo += `🎉 *Parabéns!* Você completou sua cartela! O seu próximo pedido tem prêmio!`;
+                            } else {
+                                resumo += `Faltam apenas ${metaFidelidade - pontosAtuais} pedidos para o seu prêmio!`;
+                            }
+                        } catch(erroFid) {
+                            console.error("Erro ao calcular fidelidade:", erroFid);
+                        }
+                        // ==========================================
+                        // 🔴 FIM DA MÁGICA DA FIDELIDADE
+                        // ==========================================
+
                         textoPronto += resumo;
                     }
 
