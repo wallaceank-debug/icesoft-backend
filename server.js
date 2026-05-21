@@ -1,3 +1,4 @@
+require('dotenv').config();
 // ==========================================
 // PEÇAS DO MOTOR E CONFIGURAÇÕES
 // ==========================================
@@ -72,7 +73,7 @@ app.post('/api/upload', upload.single('imagem'), async (req, res) => {
 // CONEXÃO COM O BANCO DE DADOS NA NUVEM (NEON)
 // ==========================================
 const pool = new Pool({
-    connectionString: 'postgresql://neondb_owner:npg_9zVonry3CfAN@ep-crimson-violet-amb5wph0-pooler.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require'
+    connectionString: process.env.DATABASE_URL
 });
 
 pool.connect()
