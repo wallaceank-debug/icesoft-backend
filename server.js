@@ -605,8 +605,21 @@ app.post('/api/pagamento/webhook', async (req, res) => {
             const mpToken = (await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'")).rows[0]?.valor;
             const pgtoInfo = await (await fetch(`https://api.mercadopago.com/v1/payments/${pagamentoId}`, { headers: { 'Authorization': `Bearer ${mpToken}` } })).json();
             if (pgtoInfo.status === 'approved') {
-                await pool.query("UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1", [pagamentoId.toString()]);
+                const resultado = await pool.query(
+                    "UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1 RETURNING numero_diario, cliente_nome", 
+                    [pagamentoId.toString()]
+                );
+                
                 console.log(`✅ Pagamento Pix ${pagamentoId} APROVADO!`);
+
+                if (resultado.rows.length > 0) {
+                    const pedido = resultado.rows[0];
+                    io.emit('novo_pedido_kanban', { 
+                        id: pedido.numero_diario, 
+                        cliente: pedido.cliente_nome, 
+                        status: 'Pendente Delivery' 
+                    });
+                }
             }
         }
     } catch (e) {}
