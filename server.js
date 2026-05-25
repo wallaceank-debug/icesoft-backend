@@ -379,7 +379,86 @@ app.get('/api/ranking', async (req, res) => {
 
 app.get('/api/caixa/status', async (req, res) => { try { res.json((await pool.query('SELECT * FROM controle_caixa ORDER BY id DESC LIMIT 1')).rows[0] || { status: 'Fechado' }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
 app.post('/api/caixa/abrir', async (req, res) => { try { res.json({ sucesso: true, caixa: (await pool.query("INSERT INTO controle_caixa (valor_inicial, status) VALUES ($1, 'Aberto') RETURNING *", [req.body.valor_inicial || 0])).rows[0] }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
-app.put('/api/caixa/fechar/:id', async (req, res) => { try { res.json({ sucesso: true, caixa: (await pool.query("UPDATE controle_caixa SET status = 'Fechado', data_fechamento = CURRENT_TIMESTAMP, valor_informado = $1, valor_sistema = $2 WHERE id = $3 RETURNING *", [req.body.valor_informado || 0, req.body.valor_sistema || 0, req.params.id])).rows[0] }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
+
+// ==========================================
+// 🔒 FECHAMENTO DE CAIXA COM INJEÇÃO FINANCEIRA (CONTA DE TRANSIÇÃO)
+// ==========================================
+app.put('/api/caixa/fechar/:id', async (req, res) => {
+    try {
+        // 1. Fecha o caixa e captura a data exata
+        const resultCaixa = await pool.query(
+            "UPDATE controle_caixa SET status = 'Fechado', data_fechamento = CURRENT_TIMESTAMP, valor_informado = $1, valor_sistema = $2 WHERE id = $3 RETURNING *",
+            [req.body.valor_informado || 0, req.body.valor_sistema || 0, req.params.id]
+        );
+        const caixa = resultCaixa.rows[0];
+
+        // 2. Busca todas as vendas finalizadas durante o turno deste caixa
+        const vendasQuery = await pool.query(`
+            SELECT forma_pagamento, SUM(valor_total) as total
+            FROM vendas
+            WHERE data_hora >= $1 AND data_hora <= $2 AND status NOT ILIKE '%cancelad%'
+            GROUP BY forma_pagamento
+        `, [caixa.data_abertura, caixa.data_fechamento]);
+
+        let totalDinheiro = 0;
+        let totalDigital = 0;
+
+        vendasQuery.rows.forEach(v => {
+            const valor = parseFloat(v.total);
+            if (v.forma_pagamento.toLowerCase().includes('dinheiro')) {
+                totalDinheiro += valor;
+            } else {
+                totalDigital += valor;
+            }
+        });
+
+        // 3. Garante que a Categoria "Invisível" (Conta Transitória) exista para não duplicar no DRE
+        let catResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'movimentacao_interna' LIMIT 1");
+        if (catResult.rows.length === 0) {
+            catResult = await pool.query("INSERT INTO fin_categorias (nome, tipo, dre_ref) VALUES ('Transferência / Fechamento', 'Receita', 'movimentacao_interna') RETURNING id");
+        }
+        const categoriaId = catResult.rows[0].id;
+
+        // 4. Garante que as contas de Banco existem
+        let contaFisicoResult = await pool.query("SELECT id FROM fin_contas_bancarias WHERE nome ILIKE '%Caixa Físico%' LIMIT 1");
+        if (contaFisicoResult.rows.length === 0) {
+            contaFisicoResult = await pool.query("INSERT INTO fin_contas_bancarias (nome, saldo_inicial) VALUES ('Caixa Físico (Gaveta)', 0) RETURNING id");
+        }
+        const contaFisicoId = contaFisicoResult.rows[0].id;
+
+        let contaTransicaoResult = await pool.query("SELECT id FROM fin_contas_bancarias WHERE nome ILIKE '%Transição%' LIMIT 1");
+        if (contaTransicaoResult.rows.length === 0) {
+            contaTransicaoResult = await pool.query("INSERT INTO fin_contas_bancarias (nome, saldo_inicial) VALUES ('Conta de Transição (A Receber)', 0) RETURNING id");
+        }
+        const contaTransicaoId = contaTransicaoResult.rows[0].id;
+
+        // 5. Injeta no Financeiro silenciosamente
+        const promessasLancamentos = [];
+        const dataFormatada = new Date().toISOString().split('T')[0]; // Hoje
+
+        if (totalDinheiro > 0) {
+            promessasLancamentos.push(pool.query(`
+                INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
+                VALUES ($1, $2, $3, 'Pago', 'Receita', $4, $5)
+            `, [`Fechamento de Caixa #${caixa.id} (Dinheiro)`, totalDinheiro, dataFormatada, categoriaId, contaFisicoId]));
+        }
+
+        if (totalDigital > 0) {
+            promessasLancamentos.push(pool.query(`
+                INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
+                VALUES ($1, $2, $3, 'Pago', 'Receita', $4, $5)
+            `, [`Fechamento de Caixa #${caixa.id} (Cartões/Pix/Ifood)`, totalDigital, dataFormatada, categoriaId, contaTransicaoId]));
+        }
+
+        await Promise.all(promessasLancamentos);
+
+        res.json({ sucesso: true, caixa });
+    } catch (e) {
+        console.error("Erro no fechamento com financeiro:", e);
+        res.status(500).json({ erro: "Erro interno no fechamento" });
+    }
+});
+
 app.post('/api/caixa/movimentacao', async (req, res) => { try { res.json({ sucesso: true, movimentacao: (await pool.query("INSERT INTO movimentacoes_caixa (caixa_id, tipo, valor, motivo) VALUES ($1, $2, $3, $4) RETURNING *", [req.body.caixa_id, req.body.tipo, req.body.valor, req.body.motivo])).rows[0] }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
 app.get('/api/caixa/resumo/:id', async (req, res) => {
     try {
@@ -799,36 +878,32 @@ app.post('/api/whatsapp/disparo-manual', async (req, res) => {
 // 1. Resumo Inteligente (Cards do Dashboard Financeiro com Vendas Automáticas)
 app.get('/api/financeiro/resumo', async (req, res) => {
     try {
-        // Contas a Pagar (Despesas Pendentes do mês atual)
+        // Ignora a categoria 'movimentacao_interna' para não duplicar o saldo!
         const pagarQuery = await pool.query(`
-            SELECT COALESCE(SUM(valor), 0) as total 
-            FROM fin_lancamentos 
-            WHERE tipo = 'Despesa' AND status = 'Pendente' 
-            AND EXTRACT(MONTH FROM data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE)
-            AND EXTRACT(YEAR FROM data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            SELECT COALESCE(SUM(l.valor), 0) as total 
+            FROM fin_lancamentos l
+            LEFT JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE l.tipo = 'Despesa' AND l.status = 'Pendente' 
+            AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna')
+            AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE)
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
         `);
 
-        // Contas a Receber (Receitas Manuais Pendentes do mês atual)
         const receberQuery = await pool.query(`
-            SELECT COALESCE(SUM(valor), 0) as total 
-            FROM fin_lancamentos 
-            WHERE tipo = 'Receita' AND status = 'Pendente'
-            AND EXTRACT(MONTH FROM data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE)
-            AND EXTRACT(YEAR FROM data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            SELECT COALESCE(SUM(l.valor), 0) as total 
+            FROM fin_lancamentos l
+            LEFT JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE l.tipo = 'Receita' AND l.status = 'Pendente'
+            AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna')
+            AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE)
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
         `);
 
-        // Lançamentos Manuais Pagos/Recebidos
-        const entradasQuery = await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM fin_lancamentos WHERE tipo = 'Receita' AND status = 'Pago'`);
-        const saidasQuery = await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM fin_lancamentos WHERE tipo = 'Despesa' AND status = 'Pago'`);
+        const entradasQuery = await pool.query(`SELECT COALESCE(SUM(l.valor), 0) as total FROM fin_lancamentos l LEFT JOIN fin_categorias c ON l.categoria_id = c.id WHERE l.tipo = 'Receita' AND l.status = 'Pago' AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna')`);
+        const saidasQuery = await pool.query(`SELECT COALESCE(SUM(l.valor), 0) as total FROM fin_lancamentos l LEFT JOIN fin_categorias c ON l.categoria_id = c.id WHERE l.tipo = 'Despesa' AND l.status = 'Pago' AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna')`);
         
-        // 🚀 AUTOMACÃO: Puxa o valor de TODAS as vendas já realizadas na história da sorveteria (que não foram canceladas)
-        const vendasTotalQuery = await pool.query(`
-            SELECT COALESCE(SUM(valor_total), 0) as total 
-            FROM vendas 
-            WHERE status NOT ILIKE '%cancelad%'
-        `);
+        const vendasTotalQuery = await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE status NOT ILIKE '%cancelad%'`);
 
-        // O Saldo Geral agora é: (Entradas Manuais - Despesas Pagas) + Faturamento Total Real do PDV/Delivery
         const faturamentoTotalPDV = parseFloat(vendasTotalQuery.rows[0].total);
         const saldoGeralSistemico = parseFloat(entradasQuery.rows[0].total) - parseFloat(saidasQuery.rows[0].total) + faturamentoTotalPDV;
 
@@ -1148,6 +1223,9 @@ app.get('/api/financeiro/fluxo-caixa', async (req, res) => {
             lancamentosMes.forEach(l => {
                 // REGRA DE OURO: Se o mês já passou, só conta o que foi 'Pago'. Se é atual ou futuro, conta tudo (Previsto)
                 if (mes < mesAtualStr && l.status !== 'Pago') return;
+
+                // 🛑 MÁGICA: IGNORA TRANSFERÊNCIAS INTERNAS E FECHAMENTOS PARA NÃO DUPLICAR ENTRADA!
+                if (l.dre_ref === 'movimentacao_interna') return;
 
                 const valor = parseFloat(l.total);
                 if (l.tipo === 'Receita') receitas_manuais += valor;
