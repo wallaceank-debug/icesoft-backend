@@ -915,13 +915,17 @@ app.get('/api/financeiro/dre', async (req, res) => {
             receita_bruta: 0, deducoes: 0, cmv: 0, 
             despesas_vendas: 0, despesas_operacionais: 0, 
             investimentos: 0, despesas_financeiras: 0, 
-            distribuicao_lucros: 0, outras_receitas: 0, nao_operacional: 0
+            distribuicao_lucros: 0, outras_receitas: 0, nao_operacional: 0,
+            aporte_capital: 0 // 💡 Adicionado para o motor reconhecer a gaveta da categoria 5.4
         };
 
         // Preenche o esqueleto com o dinheiro real que encontrou no banco
         resultado.rows.forEach(row => {
             if (dre[row.dre_ref] !== undefined) dre[row.dre_ref] = parseFloat(row.total);
         });
+
+        // 💡 Soma o aporte de capital na linha de outras receitas para renderizar certinho no campo da tela
+        dre.outras_receitas = dre.outras_receitas + dre.aporte_capital;
 
         // 🧠 A MÁGICA DA CONTABILIDADE: Cálculos Automáticos em Cascata
         dre.receita_liquida = dre.receita_bruta - dre.deducoes;
