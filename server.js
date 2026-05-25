@@ -1260,5 +1260,58 @@ app.get('/api/financeiro/fluxo-caixa', async (req, res) => {
     }
 });
 
+// 12. Executar Transferência entre Contas com Dedução de Taxas (Auditoria)
+app.post('/api/financeiro/transferencias', async (req, res) => {
+    try {
+        const { conta_origem_id, conta_destino_id, valor_bruto, taxa, descricao } = req.body;
+        
+        const vBruto = parseFloat(valor_bruto);
+        const vTaxa = parseFloat(taxa) || 0;
+        const vLiquido = vBruto - vTaxa;
+        const dataAtual = new Date().toISOString().split('T')[0];
+
+        // 1. Procura ou cria a categoria de movimentação interna (para o DRE ignorar o saldo principal)
+        let catResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'movimentacao_interna' LIMIT 1");
+        if (catResult.rows.length === 0) {
+            catResult = await pool.query("INSERT INTO fin_categorias (nome, tipo, dre_ref) VALUES ('Transferência / Fechamento', 'Receita', 'movimentacao_interna') RETURNING id");
+        }
+        const categoriaInternaId = catResult.rows[0].id;
+
+        // 2. Procura a categoria de taxas (Deduções) para computar a taxa no DRE oficialmente
+        let catTaxaResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'deducoes' LIMIT 1");
+        const categoriaTaxaId = catTaxaResult.rows[0]?.id || null;
+
+        // Inicia a transação de segurança no banco de dados
+        await pool.query('BEGIN');
+
+        // A) Lança a saída do valor bruto da conta de origem (Ignorado pelo DRE)
+        await pool.query(`
+            INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
+            VALUES ($1, $2, $3, 'Pago', 'Despesa', $4, $5)
+        `, [`[Saída Transferência] ${descricao}`, vBruto, dataAtual, categoriaInternaId, conta_origem_id]);
+
+        // B) Lança a entrada do valor líquido na conta de destino (Ignorado pelo DRE)
+        await pool.query(`
+            INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
+            VALUES ($1, $2, $3, 'Pago', 'Receita', $4, $5)
+        `, [`[Entrada Transferência] ${descricao}`, vLiquido, dataAtual, categoriaInternaId, conta_destino_id]);
+
+        // C) Se houver taxa, lança como uma Despesa de taxa na conta de origem (Computado no DRE!)
+        if (vTaxa > 0 && categoriaTaxaId) {
+            await pool.query(`
+                INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
+                VALUES ($1, $2, $3, 'Pago', 'Despesa', $4, $5)
+            `, [`[Taxa Maquininha] ${descricao}`, vTaxa, dataAtual, categoriaTaxaId, conta_origem_id]);
+        }
+
+        await pool.query('COMMIT');
+        res.json({ sucesso: true });
+    } catch (e) {
+        await pool.query('ROLLBACK');
+        console.error("Erro na transferência:", e);
+        res.status(500).json({ erro: "Erro ao processar transferência" });
+    }
+});
+
 const PORTA = process.env.PORT || 3000;
 server.listen(PORTA, () => console.log(`🚀 Servidor Icesoft v5.0 (com WebSockets) na porta ${PORTA}!`));
