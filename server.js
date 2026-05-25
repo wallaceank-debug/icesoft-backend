@@ -1029,6 +1029,16 @@ app.post('/api/financeiro/bancos', async (req, res) => {
     }
 });
 
+// 10. Atualizar/Editar Conta Bancária (Nome e Saldo Inicial)
+app.put('/api/financeiro/bancos/:id', async (req, res) => {
+    try {
+        await pool.query('UPDATE fin_contas_bancarias SET nome = $1, saldo_inicial = $2 WHERE id = $3', [req.body.nome, req.body.saldo_inicial || 0, req.params.id]);
+        res.json({ sucesso: true });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao atualizar banco" });
+    }
+});
+
 // 9. Dados para os Gráficos do Dashboard Financeiro
 app.get('/api/financeiro/graficos', async (req, res) => {
     try {
