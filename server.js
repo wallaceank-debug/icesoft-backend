@@ -792,5 +792,72 @@ app.post('/api/whatsapp/disparo-manual', async (req, res) => {
     }
 });
 
+// ==========================================
+// 🏦 MÓDULO FINANCEIRO: ROTAS DA API
+// ==========================================
+
+// 1. Resumo Inteligente (Cards do Dashboard Financeiro)
+app.get('/api/financeiro/resumo', async (req, res) => {
+    try {
+        // Contas a Pagar (Despesas Pendentes do mês atual)
+        const pagarQuery = await pool.query(`
+            SELECT COALESCE(SUM(valor), 0) as total 
+            FROM fin_lancamentos 
+            WHERE tipo = 'Despesa' AND status = 'Pendente' 
+            AND EXTRACT(MONTH FROM data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE)
+            AND EXTRACT(YEAR FROM data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+        `);
+
+        // Contas a Receber (Receitas Pendentes do mês atual)
+        const receberQuery = await pool.query(`
+            SELECT COALESCE(SUM(valor), 0) as total 
+            FROM fin_lancamentos 
+            WHERE tipo = 'Receita' AND status = 'Pendente'
+            AND EXTRACT(MONTH FROM data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE)
+            AND EXTRACT(YEAR FROM data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+        `);
+
+        // Saldo Atual (Matemática base: Entradas Pagas - Saídas Pagas)
+        const entradasQuery = await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM fin_lancamentos WHERE tipo = 'Receita' AND status = 'Pago'`);
+        const saidasQuery = await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM fin_lancamentos WHERE tipo = 'Despesa' AND status = 'Pago'`);
+        
+        const saldoBancos = parseFloat(entradasQuery.rows[0].total) - parseFloat(saidasQuery.rows[0].total);
+
+        res.json({
+            pagar: parseFloat(pagarQuery.rows[0].total),
+            receber: parseFloat(receberQuery.rows[0].total),
+            saldo: saldoBancos
+        });
+    } catch (e) {
+        console.error("Erro no resumo financeiro:", e);
+        res.status(500).json({ erro: "Erro ao carregar resumo financeiro" });
+    }
+});
+
+// 2. Criar um Novo Lançamento (Nova Receita / Nova Despesa)
+app.post('/api/financeiro/lancamentos', async (req, res) => {
+    try {
+        const { descricao, valor, data_vencimento, status, tipo } = req.body;
+        const novoLancamento = await pool.query(`
+            INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo)
+            VALUES ($1, $2, $3, $4, $5) RETURNING *
+        `, [descricao, valor, data_vencimento, status || 'Pendente', tipo]);
+        
+        res.status(201).json({ sucesso: true, lancamento: novoLancamento.rows[0] });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao criar lançamento" });
+    }
+});
+
+// 3. Buscar os Últimos Lançamentos (Para alimentar a Tabela da Tela)
+app.get('/api/financeiro/lancamentos', async (req, res) => {
+    try {
+        const lista = await pool.query(`SELECT * FROM fin_lancamentos ORDER BY data_vencimento ASC LIMIT 50`);
+        res.json(lista.rows);
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao buscar lançamentos" });
+    }
+});
+
 const PORTA = process.env.PORT || 3000;
 server.listen(PORTA, () => console.log(`🚀 Servidor Icesoft v5.0 (com WebSockets) na porta ${PORTA}!`));
