@@ -837,15 +837,41 @@ app.get('/api/financeiro/resumo', async (req, res) => {
 // 2. Criar um Novo Lançamento (Nova Receita / Nova Despesa)
 app.post('/api/financeiro/lancamentos', async (req, res) => {
     try {
-        const { descricao, valor, data_vencimento, status, tipo } = req.body;
+        // 👇 NOVO: Adicionamos o categoria_id
+        const { descricao, valor, data_vencimento, status, tipo, categoria_id } = req.body;
         const novoLancamento = await pool.query(`
-            INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo)
-            VALUES ($1, $2, $3, $4, $5) RETURNING *
-        `, [descricao, valor, data_vencimento, status || 'Pendente', tipo]);
+            INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id)
+            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
+        `, [descricao, valor, data_vencimento, status || 'Pendente', tipo, categoria_id || null]);
         
         res.status(201).json({ sucesso: true, lancamento: novoLancamento.rows[0] });
     } catch (e) {
         res.status(500).json({ erro: "Erro ao criar lançamento" });
+    }
+});
+
+// 5. Buscar Categorias (Injeta a base do DRE automaticamente se estiver vazio)
+app.get('/api/financeiro/categorias', async (req, res) => {
+    try {
+        const check = await pool.query('SELECT COUNT(*) FROM fin_categorias');
+        if (parseInt(check.rows[0].count) === 0) {
+            console.log("⚙️ Criando base de categorias padrão para o DRE...");
+            await pool.query(`
+                INSERT INTO fin_categorias (nome, tipo, dre_ref) VALUES 
+                ('Vendas Balcão / Loja', 'Receita', 'receita_bruta'),
+                ('Vendas Delivery', 'Receita', 'receita_bruta'),
+                ('Insumos e Mercadorias (CMV)', 'Despesa', 'cmv'),
+                ('Taxas de Cartão/Plataforma', 'Despesa', 'deducoes'),
+                ('Despesas Fixas (Água, Luz, Aluguel)', 'Despesa', 'despesas_operacionais'),
+                ('Folha de Pagamento', 'Despesa', 'despesas_operacionais'),
+                ('Marketing e Anúncios', 'Despesa', 'despesas_vendas'),
+                ('Outras Receitas/Aportes', 'Receita', 'outras_receitas')
+            `);
+        }
+        const lista = await pool.query('SELECT * FROM fin_categorias ORDER BY tipo DESC, nome ASC');
+        res.json(lista.rows);
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao buscar categorias" });
     }
 });
 
