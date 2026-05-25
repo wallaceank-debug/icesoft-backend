@@ -1088,10 +1088,10 @@ app.get('/api/financeiro/graficos', async (req, res) => {
     }
 });
 
-// 11. Relatório de Fluxo de Caixa Mês a Mês (Panorama Realizado)
+// 11. Relatório de Fluxo de Caixa (Panorama Realizado e Previsto - 12 Meses)
 app.get('/api/financeiro/fluxo-caixa', async (req, res) => {
     try {
-        // Busca vendas REAIS (sem cancelamentos) agrupadas por Ano-Mês
+        // Busca vendas REAIS (sem cancelamentos)
         const vendasQuery = await pool.query(`
             SELECT TO_CHAR(data_hora, 'YYYY-MM') as mes, COALESCE(SUM(valor_total), 0) as total
             FROM vendas 
@@ -1099,24 +1099,27 @@ app.get('/api/financeiro/fluxo-caixa', async (req, res) => {
             GROUP BY mes
         `);
 
-        // Busca despesas e receitas manuais REAIS (Apenas status 'Pago') agrupadas por Ano-Mês e referência do DRE
+        // Busca despesas e receitas, e traz o status junto para o filtro inteligente
         const lancamentosQuery = await pool.query(`
-            SELECT TO_CHAR(l.data_vencimento, 'YYYY-MM') as mes, c.dre_ref, c.tipo, COALESCE(SUM(l.valor), 0) as total
+            SELECT TO_CHAR(l.data_vencimento, 'YYYY-MM') as mes, c.dre_ref, c.tipo, l.status, COALESCE(SUM(l.valor), 0) as total
             FROM fin_lancamentos l
             JOIN fin_categorias c ON l.categoria_id = c.id
-            WHERE l.status = 'Pago'
-            GROUP BY mes, c.dre_ref, c.tipo
+            GROUP BY mes, c.dre_ref, c.tipo, l.status
         `);
 
-        // Gera o esqueleto dos últimos 6 meses (ex: 2026-01 a 2026-06)
+        // Gera o esqueleto de 12 meses: 5 meses passados + Mês Atual + 6 meses no futuro
         const meses = [];
-        for (let i = 5; i >= 0; i--) {
+        for (let i = -5; i <= 6; i++) {
             const d = new Date();
-            d.setMonth(d.getMonth() - i);
+            d.setMonth(d.getMonth() + i);
             const ano = d.getFullYear();
             const mes = String(d.getMonth() + 1).padStart(2, '0');
             meses.push(`${ano}-${mes}`);
         }
+
+        // Descobre qual é o mês atual para separar o Realizado do Previsto
+        const dataAtual = new Date();
+        const mesAtualStr = `${dataAtual.getFullYear()}-${String(dataAtual.getMonth() + 1).padStart(2, '0')}`;
 
         // Consolida a matemática mês a mês
         const fluxoCaixa = meses.map(mes => {
@@ -1127,6 +1130,9 @@ app.get('/api/financeiro/fluxo-caixa', async (req, res) => {
             let cmv = 0, desp_op = 0, desp_vendas = 0, impostos = 0, financeiras = 0, investimentos = 0;
 
             lancamentosMes.forEach(l => {
+                // REGRA DE OURO: Se o mês já passou, só conta o que foi 'Pago'. Se é atual ou futuro, conta tudo (Previsto)
+                if (mes < mesAtualStr && l.status !== 'Pago') return;
+
                 const valor = parseFloat(l.total);
                 if (l.tipo === 'Receita') receitas_manuais += valor;
                 if (l.tipo === 'Despesa') {
@@ -1135,7 +1141,7 @@ app.get('/api/financeiro/fluxo-caixa', async (req, res) => {
                     else if (l.dre_ref === 'despesas_vendas') desp_vendas += valor;
                     else if (l.dre_ref === 'deducoes') impostos += valor;
                     else if (l.dre_ref === 'investimentos') investimentos += valor;
-                    else financeiras += valor; // (Na_operacional, financeiras, distribuicao)
+                    else financeiras += valor; 
                 }
             });
 
