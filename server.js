@@ -1088,5 +1088,77 @@ app.get('/api/financeiro/graficos', async (req, res) => {
     }
 });
 
+// 11. Relatório de Fluxo de Caixa Mês a Mês (Panorama Realizado)
+app.get('/api/financeiro/fluxo-caixa', async (req, res) => {
+    try {
+        // Busca vendas REAIS (sem cancelamentos) agrupadas por Ano-Mês
+        const vendasQuery = await pool.query(`
+            SELECT TO_CHAR(data_hora, 'YYYY-MM') as mes, COALESCE(SUM(valor_total), 0) as total
+            FROM vendas 
+            WHERE status NOT ILIKE '%cancelad%'
+            GROUP BY mes
+        `);
+
+        // Busca despesas e receitas manuais REAIS (Apenas status 'Pago') agrupadas por Ano-Mês e referência do DRE
+        const lancamentosQuery = await pool.query(`
+            SELECT TO_CHAR(l.data_vencimento, 'YYYY-MM') as mes, c.dre_ref, c.tipo, COALESCE(SUM(l.valor), 0) as total
+            FROM fin_lancamentos l
+            JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE l.status = 'Pago'
+            GROUP BY mes, c.dre_ref, c.tipo
+        `);
+
+        // Gera o esqueleto dos últimos 6 meses (ex: 2026-01 a 2026-06)
+        const meses = [];
+        for (let i = 5; i >= 0; i--) {
+            const d = new Date();
+            d.setMonth(d.getMonth() - i);
+            const ano = d.getFullYear();
+            const mes = String(d.getMonth() + 1).padStart(2, '0');
+            meses.push(`${ano}-${mes}`);
+        }
+
+        // Consolida a matemática mês a mês
+        const fluxoCaixa = meses.map(mes => {
+            const vendasMes = parseFloat(vendasQuery.rows.find(v => v.mes === mes)?.total || 0);
+            const lancamentosMes = lancamentosQuery.rows.filter(l => l.mes === mes);
+            
+            let receitas_manuais = 0;
+            let cmv = 0, desp_op = 0, desp_vendas = 0, impostos = 0, financeiras = 0, investimentos = 0;
+
+            lancamentosMes.forEach(l => {
+                const valor = parseFloat(l.total);
+                if (l.tipo === 'Receita') receitas_manuais += valor;
+                if (l.tipo === 'Despesa') {
+                    if (l.dre_ref === 'cmv') cmv += valor;
+                    else if (l.dre_ref === 'despesas_operacionais') desp_op += valor;
+                    else if (l.dre_ref === 'despesas_vendas') desp_vendas += valor;
+                    else if (l.dre_ref === 'deducoes') impostos += valor;
+                    else if (l.dre_ref === 'investimentos') investimentos += valor;
+                    else financeiras += valor; // (Na_operacional, financeiras, distribuicao)
+                }
+            });
+
+            const receita_total = vendasMes + receitas_manuais;
+            const despesa_total = cmv + desp_op + desp_vendas + impostos + financeiras + investimentos;
+
+            return {
+                mes,
+                receita_vendas: vendasMes,
+                receitas_manuais,
+                receita_total,
+                cmv, desp_op, desp_vendas, impostos, financeiras, investimentos,
+                despesa_total,
+                saldo_mes: receita_total - despesa_total
+            };
+        });
+
+        res.json(fluxoCaixa);
+    } catch (e) {
+        console.error("Erro no Fluxo de Caixa:", e);
+        res.status(500).json({ erro: "Erro ao gerar fluxo de caixa" });
+    }
+});
+
 const PORTA = process.env.PORT || 3000;
 server.listen(PORTA, () => console.log(`🚀 Servidor Icesoft v5.0 (com WebSockets) na porta ${PORTA}!`));
