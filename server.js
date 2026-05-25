@@ -868,6 +868,22 @@ app.get('/api/financeiro/lancamentos', async (req, res) => {
     }
 });
 
+// 3.5 Atualizar/Editar um Lançamento
+app.put('/api/financeiro/lancamentos/:id', async (req, res) => {
+    try {
+        const { descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id } = req.body;
+        await pool.query(`
+            UPDATE fin_lancamentos 
+            SET descricao = $1, valor = $2, data_vencimento = $3, status = $4, tipo = $5, categoria_id = $6, conta_id = $7
+            WHERE id = $8
+        `, [descricao, valor, data_vencimento, status, tipo, categoria_id || null, conta_id || null, req.params.id]);
+        
+        res.json({ sucesso: true });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao atualizar lançamento" });
+    }
+});
+
 // 4. Deletar Lançamento
 app.delete('/api/financeiro/lancamentos/:id', async (req, res) => {
     try {
