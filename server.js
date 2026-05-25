@@ -970,7 +970,6 @@ app.get('/api/financeiro/dre', async (req, res) => {
     }
 });
 
-// 7. Gerenciar Contas Bancárias (Bancos)
 // 7. Gerenciar Contas Bancárias (Bancos) com Saldo Dinâmico
 app.get('/api/financeiro/bancos', async (req, res) => {
     try {
@@ -1005,6 +1004,16 @@ app.get('/api/financeiro/bancos', async (req, res) => {
     } catch (e) {
         console.error("Erro bancos:", e);
         res.status(500).json({ erro: "Erro ao buscar contas bancárias" });
+    }
+});
+
+// 8. Deletar Conta Bancária
+app.delete('/api/financeiro/bancos/:id', async (req, res) => {
+    try {
+        await pool.query('DELETE FROM fin_contas_bancarias WHERE id = $1', [req.params.id]);
+        res.json({ sucesso: true });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao deletar banco" });
     }
 });
 
