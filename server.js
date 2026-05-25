@@ -971,17 +971,39 @@ app.get('/api/financeiro/dre', async (req, res) => {
 });
 
 // 7. Gerenciar Contas Bancárias (Bancos)
+// 7. Gerenciar Contas Bancárias (Bancos) com Saldo Dinâmico
 app.get('/api/financeiro/bancos', async (req, res) => {
     try {
-        const lista = await pool.query('SELECT * FROM fin_contas_bancarias ORDER BY id ASC');
-        // Se não tiver nenhuma conta criada, ele cria o Caixa Físico como padrão
-        if (lista.rows.length === 0) {
+        const checkLista = await pool.query('SELECT * FROM fin_contas_bancarias');
+        if (checkLista.rows.length === 0) {
             await pool.query(`INSERT INTO fin_contas_bancarias (nome, saldo_inicial) VALUES ('Caixa Físico (Gaveta)', 0)`);
-            const listaNova = await pool.query('SELECT * FROM fin_contas_bancarias ORDER BY id ASC');
-            return res.json(listaNova.rows);
         }
-        res.json(lista.rows);
+
+        // 🧠 A MÁGICA: O Servidor junta a tabela de Bancos com a tabela de Lançamentos e calcula o saldo atual em tempo real!
+        const querySaldos = `
+            SELECT 
+                b.id, b.nome, b.saldo_inicial,
+                COALESCE(SUM(CASE WHEN l.tipo = 'Receita' AND l.status = 'Pago' THEN l.valor ELSE 0 END), 0) as entradas,
+                COALESCE(SUM(CASE WHEN l.tipo = 'Despesa' AND l.status = 'Pago' THEN l.valor ELSE 0 END), 0) as saidas
+            FROM fin_contas_bancarias b
+            LEFT JOIN fin_lancamentos l ON b.id = l.conta_id
+            GROUP BY b.id, b.nome, b.saldo_inicial
+            ORDER BY b.id ASC
+        `;
+        
+        const resultado = await pool.query(querySaldos);
+        
+        // Formata os dados para a tela (Saldo Inicial + Receitas Pagas - Despesas Pagas)
+        const bancosComSaldo = resultado.rows.map(banco => ({
+            id: banco.id,
+            nome: banco.nome,
+            saldo_inicial: parseFloat(banco.saldo_inicial),
+            saldo_atual: parseFloat(banco.saldo_inicial) + parseFloat(banco.entradas) - parseFloat(banco.saidas)
+        }));
+
+        res.json(bancosComSaldo);
     } catch (e) {
+        console.error("Erro bancos:", e);
         res.status(500).json({ erro: "Erro ao buscar contas bancárias" });
     }
 });
