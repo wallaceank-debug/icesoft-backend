@@ -1029,5 +1029,46 @@ app.post('/api/financeiro/bancos', async (req, res) => {
     }
 });
 
+// 9. Dados para os Gráficos do Dashboard Financeiro
+app.get('/api/financeiro/graficos', async (req, res) => {
+    try {
+        // 1. Receitas vs Despesas (Mês Atual)
+        const despesasQuery = await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM fin_lancamentos WHERE tipo = 'Despesa' AND EXTRACT(MONTH FROM data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)`);
+        const receitasQuery = await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM fin_lancamentos WHERE tipo = 'Receita' AND EXTRACT(MONTH FROM data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)`);
+        const vendasQuery = await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE status NOT ILIKE '%cancelad%' AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)`);
+
+        const totalReceitas = parseFloat(receitasQuery.rows[0].total) + parseFloat(vendasQuery.rows[0].total);
+        const totalDespesas = parseFloat(despesasQuery.rows[0].total);
+
+        // 2. Onde o dinheiro está indo? (Agrupado por Categoria do DRE)
+        const despesasPorCategoria = await pool.query(`
+            SELECT c.nome, SUM(l.valor) as total
+            FROM fin_lancamentos l
+            JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE l.tipo = 'Despesa' AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            GROUP BY c.nome
+            ORDER BY total DESC
+        `);
+
+        // 3. Canais de Venda (Qual origem dá mais dinheiro?)
+        const canaisQuery = await pool.query(`
+            SELECT origem, SUM(valor_total) as total
+            FROM vendas
+            WHERE status NOT ILIKE '%cancelad%' AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)
+            GROUP BY origem
+            ORDER BY total DESC
+        `);
+
+        res.json({
+            resumo_mes: { receitas: totalReceitas, despesas: totalDespesas },
+            despesas_pizza: despesasPorCategoria.rows,
+            canais_venda: canaisQuery.rows
+        });
+    } catch (e) {
+        console.error("Erro nos gráficos:", e);
+        res.status(500).json({ erro: "Erro ao carregar dados dos gráficos" });
+    }
+});
+
 const PORTA = process.env.PORT || 3000;
 server.listen(PORTA, () => console.log(`🚀 Servidor Icesoft v5.0 (com WebSockets) na porta ${PORTA}!`));
