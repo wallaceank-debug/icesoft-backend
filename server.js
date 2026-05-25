@@ -110,6 +110,23 @@ pool.connect()
             
             CREATE TABLE IF NOT EXISTS controle_caixa (id SERIAL PRIMARY KEY, valor_inicial DECIMAL(10,2), valor_informado DECIMAL(10,2), valor_sistema DECIMAL(10,2), data_abertura TIMESTAMP DEFAULT CURRENT_TIMESTAMP, data_fechamento TIMESTAMP, status VARCHAR(20));
             CREATE TABLE IF NOT EXISTS movimentacoes_caixa (id SERIAL PRIMARY KEY, caixa_id INTEGER, tipo VARCHAR(50), valor DECIMAL(10,2), motivo TEXT, data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+            
+            -- ==========================================
+            -- NOVAS TABELAS DO MÓDULO FINANCEIRO
+            -- ==========================================
+            CREATE TABLE IF NOT EXISTS fin_contas_bancarias (
+                id SERIAL PRIMARY KEY, nome VARCHAR(100) NOT NULL, saldo_inicial DECIMAL(10,2) DEFAULT 0.00
+            );
+            
+            CREATE TABLE IF NOT EXISTS fin_categorias (
+                id SERIAL PRIMARY KEY, nome VARCHAR(100) NOT NULL, tipo VARCHAR(20) NOT NULL, dre_ref VARCHAR(50)
+            );
+            
+            CREATE TABLE IF NOT EXISTS fin_lancamentos (
+                id SERIAL PRIMARY KEY, descricao TEXT, valor DECIMAL(10,2), data_vencimento DATE, 
+                data_pagamento DATE, status VARCHAR(20) DEFAULT 'Pendente', tipo VARCHAR(20), 
+                conta_id INTEGER, categoria_id INTEGER, recorrente BOOLEAN DEFAULT false
+            );
         `);
     })
     .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
