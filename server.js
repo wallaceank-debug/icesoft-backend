@@ -850,24 +850,45 @@ app.post('/api/financeiro/lancamentos', async (req, res) => {
     }
 });
 
-// 5. Buscar Categorias (Injeta a base do DRE automaticamente se estiver vazio)
+// 5. Buscar Categorias (Injeta o Plano de Contas Profissional)
 app.get('/api/financeiro/categorias', async (req, res) => {
     try {
         const check = await pool.query('SELECT COUNT(*) FROM fin_categorias');
-        if (parseInt(check.rows[0].count) === 0) {
-            console.log("⚙️ Criando base de categorias padrão para o DRE...");
+        
+        // Se tiver menos de 19 categorias (que é o tamanho do seu plano novo), ele atualiza o banco!
+        if (parseInt(check.rows[0].count) < 19) {
+            console.log("⚙️ Atualizando Plano de Contas Empresarial da Icesoft...");
+            await pool.query('DELETE FROM fin_categorias'); // Limpa as antigas
+            
             await pool.query(`
-                INSERT INTO fin_categorias (nome, tipo, dre_ref) VALUES 
-                ('Vendas Balcão / Loja', 'Receita', 'receita_bruta'),
-                ('Vendas Delivery', 'Receita', 'receita_bruta'),
-                ('Insumos e Mercadorias (CMV)', 'Despesa', 'cmv'),
-                ('Taxas de Cartão/Plataforma', 'Despesa', 'deducoes'),
-                ('Despesas Fixas (Água, Luz, Aluguel)', 'Despesa', 'despesas_operacionais'),
-                ('Folha de Pagamento', 'Despesa', 'despesas_operacionais'),
-                ('Marketing e Anúncios', 'Despesa', 'despesas_vendas'),
-                ('Outras Receitas/Aportes', 'Receita', 'outras_receitas')
+                INSERT INTO fin_categorias (nome, tipo, dre_ref) VALUES
+                ('1.1. Receita Loja Física (Balcão/Mesa)', 'Receita', 'receita_bruta'),
+                ('1.2. Receita Delivery (iFood, WhatsApp)', 'Receita', 'receita_bruta'),
+                ('1.3. Receita de Eventos / Encomendas', 'Receita', 'receita_bruta'),
+                
+                ('2.1. Deduções: Impostos e Taxas (DAS, Cartão)', 'Despesa', 'deducoes'),
+                ('2.2. CMV: Insumos e Bases (Leite, Açaí)', 'Despesa', 'cmv'),
+                ('2.2. CMV: Embalagens', 'Despesa', 'cmv'),
+                ('2.2. CMV: Revenda (Bebidas, Terceiros)', 'Despesa', 'cmv'),
+                ('2.3. Despesas de Entrega (Motoboy/Logística)', 'Despesa', 'despesas_vendas'),
+                
+                ('3.1. Ocupação e Utilidades (Aluguel, Energia, Água)', 'Despesa', 'despesas_operacionais'),
+                ('3.2. Pessoal (Pró-labore, Salários, Encargos)', 'Despesa', 'despesas_operacionais'),
+                ('3.3. Marketing e Vendas (Anúncios, Gráfica)', 'Despesa', 'despesas_vendas'),
+                ('3.4. Administrativo (Sistemas, Contador, Limpeza)', 'Despesa', 'despesas_operacionais'),
+                ('3.5. Manutenção e Conservação (Máquinas)', 'Despesa', 'despesas_operacionais'),
+                
+                ('4.1. Investimentos: Máquinas e Obras', 'Despesa', 'investimentos'),
+                ('4.2. Investimentos: Informática e Móveis', 'Despesa', 'investimentos'),
+                
+                ('5.1. Pagamento de Empréstimos e Juros', 'Despesa', 'nao_operacional'),
+                ('5.2. Tarifas Bancárias', 'Despesa', 'despesas_financeiras'),
+                ('5.3. Distribuição de Lucros', 'Despesa', 'distribuicao_lucros'),
+                ('5.4. Aportes de Capital / Investimento', 'Receita', 'aporte_capital')
             `);
         }
+        
+        // O ORDER BY 'nome ASC' garante que o 1.1 apareça antes do 1.2, etc.
         const lista = await pool.query('SELECT * FROM fin_categorias ORDER BY tipo DESC, nome ASC');
         res.json(lista.rows);
     } catch (e) {
