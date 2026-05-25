@@ -846,11 +846,11 @@ app.get('/api/financeiro/resumo', async (req, res) => {
 // 2. Criar um Novo Lançamento (Nova Receita / Nova Despesa)
 app.post('/api/financeiro/lancamentos', async (req, res) => {
     try {
-        const { descricao, valor, data_vencimento, status, tipo, categoria_id } = req.body;
+        const { descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id } = req.body;
         const novoLancamento = await pool.query(`
-            INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id)
-            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
-        `, [descricao, valor, data_vencimento, status || 'Pendente', tipo, categoria_id || null]);
+            INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
+        `, [descricao, valor, data_vencimento, status || 'Pendente', tipo, categoria_id || null, conta_id || null]);
         
         res.status(201).json({ sucesso: true, lancamento: novoLancamento.rows[0] });
     } catch (e) {
@@ -967,6 +967,34 @@ app.get('/api/financeiro/dre', async (req, res) => {
     } catch (e) {
         console.error("Erro no DRE:", e);
         res.status(500).json({ erro: "Erro ao calcular DRE" });
+    }
+});
+
+// 7. Gerenciar Contas Bancárias (Bancos)
+app.get('/api/financeiro/bancos', async (req, res) => {
+    try {
+        const lista = await pool.query('SELECT * FROM fin_contas_bancarias ORDER BY id ASC');
+        // Se não tiver nenhuma conta criada, ele cria o Caixa Físico como padrão
+        if (lista.rows.length === 0) {
+            await pool.query(`INSERT INTO fin_contas_bancarias (nome, saldo_inicial) VALUES ('Caixa Físico (Gaveta)', 0)`);
+            const listaNova = await pool.query('SELECT * FROM fin_contas_bancarias ORDER BY id ASC');
+            return res.json(listaNova.rows);
+        }
+        res.json(lista.rows);
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao buscar contas bancárias" });
+    }
+});
+
+app.post('/api/financeiro/bancos', async (req, res) => {
+    try {
+        const novoBanco = await pool.query(`
+            INSERT INTO fin_contas_bancarias (nome, saldo_inicial)
+            VALUES ($1, $2) RETURNING *
+        `, [req.body.nome, req.body.saldo_inicial || 0]);
+        res.status(201).json({ sucesso: true, banco: novoBanco.rows[0] });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao criar conta bancária" });
     }
 });
 
