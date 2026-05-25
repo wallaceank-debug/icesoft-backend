@@ -548,15 +548,22 @@ app.get('/api/crm/clientes', async (req, res) => {
             contagem_produtos AS (
                 SELECT 
                     v.cliente_telefone AS telefone,
-                    COALESCE(item->>'nome', item->>'produto_nome', item->>'nomeBase') AS nome_produto,
+                    TRIM(SPLIT_PART(REPLACE(COALESCE(item->>'nome', item->>'produto_nome', item->>'nomeBase', 'Diversos'), 'Delivery: ', ''), '(', 1)) AS nome_produto,
                     COUNT(*) AS total_vezes,
-                    ROW_NUMBER() OVER (PARTITION BY v.cliente_telefone ORDER BY COUNT(*) DESC, COALESCE(item->>'nome', item->>'produto_nome', item->>'nomeBase') ASC) as rank_favorito
+                    ROW_NUMBER() OVER (
+                        PARTITION BY v.cliente_telefone 
+                        ORDER BY COUNT(*) DESC, TRIM(SPLIT_PART(REPLACE(COALESCE(item->>'nome', item->>'produto_nome', item->>'nomeBase', 'Diversos'), 'Delivery: ', ''), '(', 1)) ASC
+                    ) as rank_favorito
                 FROM vendas v
                 CROSS JOIN LATERAL jsonb_array_elements(
-                    CASE WHEN jsonb_typeof(v.itens) = 'array' THEN v.itens ELSE '[]'::jsonb END
+                    CASE 
+                        WHEN jsonb_typeof(v.itens) = 'string' AND (v.itens#>>'{}') LIKE '[%' THEN (v.itens#>>'{}')::jsonb
+                        WHEN jsonb_typeof(v.itens) = 'array' THEN v.itens 
+                        ELSE '[]'::jsonb 
+                    END
                 ) AS item
                 WHERE v.cliente_telefone IS NOT NULL AND TRIM(v.cliente_telefone) != '' AND v.status != 'Cancelada' AND v.status != 'Cancelado'
-                GROUP BY v.cliente_telefone, COALESCE(item->>'nome', item->>'produto_nome', item->>'nomeBase')
+                GROUP BY v.cliente_telefone, TRIM(SPLIT_PART(REPLACE(COALESCE(item->>'nome', item->>'produto_nome', item->>'nomeBase', 'Diversos'), 'Delivery: ', ''), '(', 1))
             )
             SELECT 
                 cb.telefone, 
