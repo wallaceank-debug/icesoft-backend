@@ -896,6 +896,49 @@ app.get('/api/financeiro/categorias', async (req, res) => {
     }
 });
 
+// 6. Relatório DRE (Demonstrativo do Resultado do Exercício)
+app.get('/api/financeiro/dre', async (req, res) => {
+    try {
+        // Busca todos os lançamentos do mês atual e agrupa pelas categorias do DRE
+        const query = `
+            SELECT c.dre_ref, COALESCE(SUM(l.valor), 0) as total 
+            FROM fin_lancamentos l
+            JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            GROUP BY c.dre_ref
+        `;
+        const resultado = await pool.query(query);
+        
+        // Inicia o "esqueleto" do DRE zerado
+        const dre = {
+            receita_bruta: 0, deducoes: 0, cmv: 0, 
+            despesas_vendas: 0, despesas_operacionais: 0, 
+            investimentos: 0, despesas_financeiras: 0, 
+            distribuicao_lucros: 0, outras_receitas: 0, nao_operacional: 0
+        };
+
+        // Preenche o esqueleto com o dinheiro real que encontrou no banco
+        resultado.rows.forEach(row => {
+            if (dre[row.dre_ref] !== undefined) dre[row.dre_ref] = parseFloat(row.total);
+        });
+
+        // 🧠 A MÁGICA DA CONTABILIDADE: Cálculos Automáticos em Cascata
+        dre.receita_liquida = dre.receita_bruta - dre.deducoes;
+        dre.lucro_bruto = dre.receita_liquida - dre.cmv;
+        
+        const total_despesas = dre.despesas_operacionais + dre.despesas_vendas;
+        dre.resultado_operacional = dre.lucro_bruto - total_despesas;
+        
+        dre.lucro_liquido = dre.resultado_operacional + dre.outras_receitas - (dre.despesas_financeiras + dre.nao_operacional + dre.distribuicao_lucros + dre.investimentos);
+
+        res.json(dre);
+    } catch (e) {
+        console.error("Erro no DRE:", e);
+        res.status(500).json({ erro: "Erro ao calcular DRE" });
+    }
+});
+
 // 3. Buscar os Últimos Lançamentos (Para alimentar a Tabela da Tela)
 app.get('/api/financeiro/lancamentos', async (req, res) => {
     try {
