@@ -1017,7 +1017,7 @@ app.post('/api/financeiro/bancos', async (req, res) => {
     }
 });
 
-// 8. Atualizar/Editar Conta Bancária (Bloqueia a duplicação de caixas)
+// 8. Atualizar/Editar Conta Bancária
 app.put('/api/financeiro/bancos/:id', async (req, res) => {
     try {
         await pool.query('UPDATE fin_contas_bancarias SET nome = $1, saldo_inicial = $2 WHERE id = $3', [req.body.nome, req.body.saldo_inicial || 0, req.params.id]);
@@ -1034,28 +1034,6 @@ app.delete('/api/financeiro/bancos/:id', async (req, res) => {
         res.json({ sucesso: true });
     } catch (e) {
         res.status(500).json({ erro: "Erro ao deletar banco" });
-    }
-});
-
-// 8. Deletar Conta Bancária
-app.delete('/api/financeiro/bancos/:id', async (req, res) => {
-    try {
-        await pool.query('DELETE FROM fin_contas_bancarias WHERE id = $1', [req.params.id]);
-        res.json({ sucesso: true });
-    } catch (e) {
-        res.status(500).json({ erro: "Erro ao deletar banco" });
-    }
-});
-
-app.post('/api/financeiro/bancos', async (req, res) => {
-    try {
-        const novoBanco = await pool.query(`
-            INSERT INTO fin_contas_bancarias (nome, saldo_inicial)
-            VALUES ($1, $2) RETURNING *
-        `, [req.body.nome, req.body.saldo_inicial || 0]);
-        res.status(201).json({ sucesso: true, banco: novoBanco.rows[0] });
-    } catch (e) {
-        res.status(500).json({ erro: "Erro ao criar conta bancária" });
     }
 });
 
