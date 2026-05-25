@@ -970,7 +970,7 @@ app.get('/api/financeiro/dre', async (req, res) => {
     }
 });
 
-// 7. Gerenciar Contas Bancárias (Bancos) com Saldo Dinâmico
+// 7. Gerenciar Contas Bancárias (Bancos) com Saldo Dinâmico Real
 app.get('/api/financeiro/bancos', async (req, res) => {
     try {
         const checkLista = await pool.query('SELECT * FROM fin_contas_bancarias');
@@ -978,7 +978,7 @@ app.get('/api/financeiro/bancos', async (req, res) => {
             await pool.query(`INSERT INTO fin_contas_bancarias (nome, saldo_inicial) VALUES ('Caixa Físico (Gaveta)', 0)`);
         }
 
-        // 🧠 A MÁGICA: O Servidor junta a tabela de Bancos com a tabela de Lançamentos e calcula o saldo atual em tempo real!
+        // Calcula o saldo somando entradas pagas e subtraindo saídas pagas em tempo real
         const querySaldos = `
             SELECT 
                 b.id, b.nome, b.saldo_inicial,
@@ -991,8 +991,6 @@ app.get('/api/financeiro/bancos', async (req, res) => {
         `;
         
         const resultado = await pool.query(querySaldos);
-        
-        // Formata os dados para a tela (Saldo Inicial + Receitas Pagas - Despesas Pagas)
         const bancosComSaldo = resultado.rows.map(banco => ({
             id: banco.id,
             nome: banco.nome,
@@ -1003,7 +1001,39 @@ app.get('/api/financeiro/bancos', async (req, res) => {
         res.json(bancosComSaldo);
     } catch (e) {
         console.error("Erro bancos:", e);
-        res.status(500).json({ erro: "Erro ao buscar contas bancárias" });
+        res.status(500).json({ erro: "Erro ao buscar contas" });
+    }
+});
+
+app.post('/api/financeiro/bancos', async (req, res) => {
+    try {
+        const novoBanco = await pool.query(`
+            INSERT INTO fin_contas_bancarias (nome, saldo_inicial)
+            VALUES ($1, $2) RETURNING *
+        `, [req.body.nome, req.body.saldo_inicial || 0]);
+        res.status(201).json({ sucesso: true, banco: novoBanco.rows[0] });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao criar conta bancária" });
+    }
+});
+
+// 8. Atualizar/Editar Conta Bancária (Bloqueia a duplicação de caixas)
+app.put('/api/financeiro/bancos/:id', async (req, res) => {
+    try {
+        await pool.query('UPDATE fin_contas_bancarias SET nome = $1, saldo_inicial = $2 WHERE id = $3', [req.body.nome, req.body.saldo_inicial || 0, req.params.id]);
+        res.json({ sucesso: true });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao atualizar banco" });
+    }
+});
+
+// 9. Deletar Conta Bancária
+app.delete('/api/financeiro/bancos/:id', async (req, res) => {
+    try {
+        await pool.query('DELETE FROM fin_contas_bancarias WHERE id = $1', [req.params.id]);
+        res.json({ sucesso: true });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao deletar banco" });
     }
 });
 
