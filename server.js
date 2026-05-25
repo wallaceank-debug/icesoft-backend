@@ -859,5 +859,16 @@ app.get('/api/financeiro/lancamentos', async (req, res) => {
     }
 });
 
+// 4. Deletar Lançamento
+app.delete('/api/financeiro/lancamentos/:id', async (req, res) => {
+    try {
+        await pool.query('DELETE FROM fin_lancamentos WHERE id = $1', [req.params.id]);
+        res.json({ sucesso: true });
+    } catch (e) {
+        console.error("Erro ao deletar:", e);
+        res.status(500).json({ erro: "Erro ao deletar lançamento" });
+    }
+});
+
 const PORTA = process.env.PORT || 3000;
 server.listen(PORTA, () => console.log(`🚀 Servidor Icesoft v5.0 (com WebSockets) na porta ${PORTA}!`));
