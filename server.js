@@ -793,10 +793,10 @@ app.post('/api/whatsapp/disparo-manual', async (req, res) => {
 });
 
 // ==========================================
-// 🏦 MÓDULO FINANCEIRO: ROTAS DA API
+// 🏦 MÓDULO FINANCEIRO: ROTAS DA API (AUTOMATIZADO - V0.2)
 // ==========================================
 
-// 1. Resumo Inteligente (Cards do Dashboard Financeiro)
+// 1. Resumo Inteligente (Cards do Dashboard Financeiro com Vendas Automáticas)
 app.get('/api/financeiro/resumo', async (req, res) => {
     try {
         // Contas a Pagar (Despesas Pendentes do mês atual)
@@ -808,7 +808,7 @@ app.get('/api/financeiro/resumo', async (req, res) => {
             AND EXTRACT(YEAR FROM data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
         `);
 
-        // Contas a Receber (Receitas Pendentes do mês atual)
+        // Contas a Receber (Receitas Manuais Pendentes do mês atual)
         const receberQuery = await pool.query(`
             SELECT COALESCE(SUM(valor), 0) as total 
             FROM fin_lancamentos 
@@ -817,16 +817,25 @@ app.get('/api/financeiro/resumo', async (req, res) => {
             AND EXTRACT(YEAR FROM data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
         `);
 
-        // Saldo Atual (Matemática base: Entradas Pagas - Saídas Pagas)
+        // Lançamentos Manuais Pagos/Recebidos
         const entradasQuery = await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM fin_lancamentos WHERE tipo = 'Receita' AND status = 'Pago'`);
         const saidasQuery = await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM fin_lancamentos WHERE tipo = 'Despesa' AND status = 'Pago'`);
         
-        const saldoBancos = parseFloat(entradasQuery.rows[0].total) - parseFloat(saidasQuery.rows[0].total);
+        // 🚀 AUTOMACÃO: Puxa o valor de TODAS as vendas já realizadas na história da sorveteria (que não foram canceladas)
+        const vendasTotalQuery = await pool.query(`
+            SELECT COALESCE(SUM(valor_total), 0) as total 
+            FROM vendas 
+            WHERE status NOT ILIKE '%cancelad%'
+        `);
+
+        // O Saldo Geral agora é: (Entradas Manuais - Despesas Pagas) + Faturamento Total Real do PDV/Delivery
+        const faturamentoTotalPDV = parseFloat(vendasTotalQuery.rows[0].total);
+        const saldoGeralSistemico = parseFloat(entradasQuery.rows[0].total) - parseFloat(saidasQuery.rows[0].total) + faturamentoTotalPDV;
 
         res.json({
             pagar: parseFloat(pagarQuery.rows[0].total),
             receber: parseFloat(receberQuery.rows[0].total),
-            saldo: saldoBancos
+            saldo: saldoGeralSistemico
         });
     } catch (e) {
         console.error("Erro no resumo financeiro:", e);
@@ -837,7 +846,6 @@ app.get('/api/financeiro/resumo', async (req, res) => {
 // 2. Criar um Novo Lançamento (Nova Receita / Nova Despesa)
 app.post('/api/financeiro/lancamentos', async (req, res) => {
     try {
-        // 👇 NOVO: Adicionamos o categoria_id
         const { descricao, valor, data_vencimento, status, tipo, categoria_id } = req.body;
         const novoLancamento = await pool.query(`
             INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id)
@@ -850,103 +858,10 @@ app.post('/api/financeiro/lancamentos', async (req, res) => {
     }
 });
 
-// 5. Buscar Categorias (Injeta o Plano de Contas Profissional)
-app.get('/api/financeiro/categorias', async (req, res) => {
-    try {
-        const check = await pool.query('SELECT COUNT(*) FROM fin_categorias');
-        
-        // Se tiver menos de 19 categorias (que é o tamanho do seu plano novo), ele atualiza o banco!
-        if (parseInt(check.rows[0].count) < 19) {
-            console.log("⚙️ Atualizando Plano de Contas Empresarial da Icesoft...");
-            await pool.query('DELETE FROM fin_categorias'); // Limpa as antigas
-            
-            await pool.query(`
-                INSERT INTO fin_categorias (nome, tipo, dre_ref) VALUES
-                ('1.1. Receita Loja Física (Balcão/Mesa)', 'Receita', 'receita_bruta'),
-                ('1.2. Receita Delivery (iFood, WhatsApp)', 'Receita', 'receita_bruta'),
-                ('1.3. Receita de Eventos / Encomendas', 'Receita', 'receita_bruta'),
-                
-                ('2.1. Deduções: Impostos e Taxas (DAS, Cartão)', 'Despesa', 'deducoes'),
-                ('2.2. CMV: Insumos e Bases (Leite, Açaí)', 'Despesa', 'cmv'),
-                ('2.2. CMV: Embalagens', 'Despesa', 'cmv'),
-                ('2.2. CMV: Revenda (Bebidas, Terceiros)', 'Despesa', 'cmv'),
-                ('2.3. Despesas de Entrega (Motoboy/Logística)', 'Despesa', 'despesas_vendas'),
-                
-                ('3.1. Ocupação e Utilidades (Aluguel, Energia, Água)', 'Despesa', 'despesas_operacionais'),
-                ('3.2. Pessoal (Pró-labore, Salários, Encargos)', 'Despesa', 'despesas_operacionais'),
-                ('3.3. Marketing e Vendas (Anúncios, Gráfica)', 'Despesa', 'despesas_vendas'),
-                ('3.4. Administrativo (Sistemas, Contador, Limpeza)', 'Despesa', 'despesas_operacionais'),
-                ('3.5. Manutenção e Conservação (Máquinas)', 'Despesa', 'despesas_operacionais'),
-                
-                ('4.1. Investimentos: Máquinas e Obras', 'Despesa', 'investimentos'),
-                ('4.2. Investimentos: Informática e Móveis', 'Despesa', 'investimentos'),
-                
-                ('5.1. Pagamento de Empréstimos e Juros', 'Despesa', 'nao_operacional'),
-                ('5.2. Tarifas Bancárias', 'Despesa', 'despesas_financeiras'),
-                ('5.3. Distribuição de Lucros', 'Despesa', 'distribuicao_lucros'),
-                ('5.4. Aportes de Capital / Investimento', 'Receita', 'aporte_capital')
-            `);
-        }
-        
-        // O ORDER BY 'nome ASC' garante que o 1.1 apareça antes do 1.2, etc.
-        const lista = await pool.query('SELECT * FROM fin_categorias ORDER BY tipo DESC, nome ASC');
-        res.json(lista.rows);
-    } catch (e) {
-        res.status(500).json({ erro: "Erro ao buscar categorias" });
-    }
-});
-
-// 6. Relatório DRE (Demonstrativo do Resultado do Exercício)
-app.get('/api/financeiro/dre', async (req, res) => {
-    try {
-        // Busca todos os lançamentos do mês atual e agrupa pelas categorias do DRE
-        const query = `
-            SELECT c.dre_ref, COALESCE(SUM(l.valor), 0) as total 
-            FROM fin_lancamentos l
-            JOIN fin_categorias c ON l.categoria_id = c.id
-            WHERE EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
-            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
-            GROUP BY c.dre_ref
-        `;
-        const resultado = await pool.query(query);
-        
-        // Inicia o "esqueleto" do DRE zerado
-        const dre = {
-            receita_bruta: 0, deducoes: 0, cmv: 0, 
-            despesas_vendas: 0, despesas_operacionais: 0, 
-            investimentos: 0, despesas_financeiras: 0, 
-            distribuicao_lucros: 0, outras_receitas: 0, nao_operacional: 0,
-            aporte_capital: 0 // 💡 Adicionado para o motor reconhecer a gaveta da categoria 5.4
-        };
-
-        // Preenche o esqueleto com o dinheiro real que encontrou no banco
-        resultado.rows.forEach(row => {
-            if (dre[row.dre_ref] !== undefined) dre[row.dre_ref] = parseFloat(row.total);
-        });
-
-        // 💡 Soma o aporte de capital na linha de outras receitas para renderizar certinho no campo da tela
-        dre.outras_receitas = dre.outras_receitas + dre.aporte_capital;
-
-        // 🧠 A MÁGICA DA CONTABILIDADE: Cálculos Automáticos em Cascata
-        dre.receita_liquida = dre.receita_bruta - dre.deducoes;
-        dre.lucro_bruto = dre.receita_liquida - dre.cmv;
-        
-        const total_despesas = dre.despesas_operacionais + dre.despesas_vendas;
-        dre.resultado_operacional = dre.lucro_bruto - total_despesas;
-        
-        dre.lucro_liquido = dre.resultado_operacional + dre.outras_receitas - (dre.despesas_financeiras + dre.nao_operacional + dre.distribuicao_lucros + dre.investimentos);
-
-        res.json(dre);
-    } catch (e) {
-        console.error("Erro no DRE:", e);
-        res.status(500).json({ erro: "Erro ao calcular DRE" });
-    }
-});
-
 // 3. Buscar os Últimos Lançamentos (Para alimentar a Tabela da Tela)
 app.get('/api/financeiro/lancamentos', async (req, res) => {
     try {
-        const lista = await pool.query(`SELECT * FROM fin_lancamentos ORDER BY data_vencimento ASC LIMIT 50`);
+        const lista = await pool.query(`SELECT * FROM fin_lancamentos ORDER BY data_vencimento DESC LIMIT 50`);
         res.json(lista.rows);
     } catch (e) {
         res.status(500).json({ erro: "Erro ao buscar lançamentos" });
@@ -959,8 +874,99 @@ app.delete('/api/financeiro/lancamentos/:id', async (req, res) => {
         await pool.query('DELETE FROM fin_lancamentos WHERE id = $1', [req.params.id]);
         res.json({ sucesso: true });
     } catch (e) {
-        console.error("Erro ao deletar:", e);
         res.status(500).json({ erro: "Erro ao deletar lançamento" });
+    }
+});
+
+// 5. Buscar Categorias (Plano de Contas)
+app.get('/api/financeiro/categorias', async (req, res) => {
+    try {
+        const check = await pool.query('SELECT COUNT(*) FROM fin_categorias');
+        if (parseInt(check.rows[0].count) < 19) {
+            await pool.query('DELETE FROM fin_categorias');
+            await pool.query(`
+                INSERT INTO fin_categorias (nome, tipo, dre_ref) VALUES
+                ('1.1. Receita Loja Física (Balcão/Mesa)', 'Receita', 'receita_bruta'),
+                ('1.2. Receita Delivery (iFood, WhatsApp)', 'Receita', 'receita_bruta'),
+                ('1.3. Receita de Eventos / Encomendas', 'Receita', 'receita_bruta'),
+                ('2.1. Deduções: Impostos e Taxas (DAS, Cartão)', 'Despesa', 'deducoes'),
+                ('2.2. CMV: Insumos e Bases (Leite, Açaí)', 'Despesa', 'cmv'),
+                ('2.2. CMV: Embalagens', 'Despesa', 'cmv'),
+                ('2.2. CMV: Revenda (Bebidas, Terceiros)', 'Despesa', 'cmv'),
+                ('2.3. Despesas de Entrega (Motoboy/Logística)', 'Despesa', 'despesas_vendas'),
+                ('3.1. Ocupação e Utilidades (Aluguel, Energia, Água)', 'Despesa', 'despesas_operacionais'),
+                ('3.2. Pessoal (Pró-labore, Salários, Encargos)', 'Despesa', 'despesas_operacionais'),
+                ('3.3. Marketing e Vendas (Anúncios, Gráfica)', 'Despesa', 'despesas_vendas'),
+                ('3.4. Administrativo (Sistemas, Contador, Limpeza)', 'Despesa', 'despesas_operacionais'),
+                ('3.5. Manutenção e Conservação (Máquinas)', 'Despesa', 'despesas_operacionais'),
+                ('4.1. Investimentos: Máquinas e Obras', 'Despesa', 'investimentos'),
+                ('4.2. Investimentos: Informática e Móveis', 'Despesa', 'investimentos'),
+                ('5.1. Pagamento de Empréstimos e Juros', 'Despesa', 'nao_operacional'),
+                ('5.2. Tarifas Bancárias', 'Despesa', 'despesas_financeiras'),
+                ('5.3. Distribuição de Lucros', 'Despesa', 'distribuicao_lucros'),
+                ('5.4. Aportes de Capital / Investimento', 'Receita', 'aporte_capital')
+            `);
+        }
+        const lista = await pool.query('SELECT * FROM fin_categorias ORDER BY tipo DESC, nome ASC');
+        res.json(lista.rows);
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao buscar categorias" });
+    }
+});
+
+// 6. Relatório DRE Automatizado (Cruzando lançamentos manuais + vendas do PDV)
+app.get('/api/financeiro/dre', async (req, res) => {
+    try {
+        // A) Busca despesas e receitas manuais do mês atual
+        const query = `
+            SELECT c.dre_ref, COALESCE(SUM(l.valor), 0) as total 
+            FROM fin_lancamentos l
+            JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            GROUP BY c.dre_ref
+        `;
+        const resultado = await pool.query(query);
+        
+        // B) 🚀 AUTOMACÃO: Puxa o faturamento bruto real das vendas da sorveteria deste mês
+        const vendasMesQuery = await pool.query(`
+            SELECT COALESCE(SUM(valor_total), 0) as total 
+            FROM vendas 
+            WHERE status NOT ILIKE '%cancelad%'
+            AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE)
+            AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)
+        `);
+        const faturamentoAutomaticoMes = parseFloat(vendasMesQuery.rows[0].total);
+
+        const dre = {
+            receita_bruta: 0, deducoes: 0, cmv: 0, 
+            despesas_vendas: 0, despesas_operacionais: 0, 
+            investimentos: 0, despesas_financeiras: 0, 
+            distribuicao_lucros: 0, outras_receitas: 0, nao_operacional: 0,
+            aporte_capital: 0
+        };
+
+        resultado.rows.forEach(row => {
+            if (dre[row.dre_ref] !== undefined) dre[row.dre_ref] = parseFloat(row.total);
+        });
+
+        // ⚡ Injeta automaticamente o faturamento do mês na linha de Receita Bruta do DRE
+        dre.receita_bruta = dre.receita_bruta + faturamentoAutomaticoMes;
+        dre.outras_receitas = dre.outras_receitas + dre.aporte_capital;
+
+        // Cálculos Contábeis em Cascata
+        dre.receita_liquida = dre.receita_bruta - dre.deducoes;
+        dre.lucro_bruto = dre.receita_liquida - dre.cmv;
+        
+        const total_despesas = dre.despesas_operacionais + dre.despesas_vendas;
+        dre.resultado_operacional = dre.lucro_bruto - total_despesas;
+        
+        dre.lucro_liquido = dre.resultado_operacional + dre.outras_receitas - (dre.despesas_financeiras + dre.nao_operacional + dre.distribuicao_lucros + dre.investimentos);
+
+        res.json(dre);
+    } catch (e) {
+        console.error("Erro no DRE:", e);
+        res.status(500).json({ erro: "Erro ao calcular DRE" });
     }
 });
 
