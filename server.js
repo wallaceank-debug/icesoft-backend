@@ -940,12 +940,49 @@ app.post('/api/financeiro/lancamentos', async (req, res) => {
     }
 });
 
-// 3. Buscar os Últimos Lançamentos (Para alimentar a Tabela da Tela)
+// 3. Buscar Lançamentos com Filtros Inteligentes (Data, Banco, Busca)
 app.get('/api/financeiro/lancamentos', async (req, res) => {
     try {
-        const lista = await pool.query(`SELECT * FROM fin_lancamentos ORDER BY data_vencimento DESC LIMIT 50`);
+        const { banco_id, data_inicio, data_fim, busca } = req.query;
+        
+        let query = `SELECT * FROM fin_lancamentos WHERE 1=1`;
+        let params = [];
+        let paramCount = 1;
+
+        // Se escolheu um banco específico
+        if (banco_id) {
+            query += ` AND conta_id = $${paramCount}`;
+            params.push(banco_id);
+            paramCount++;
+        }
+        
+        // Se escolheu data inicial
+        if (data_inicio) {
+            query += ` AND data_vencimento >= $${paramCount}`;
+            params.push(data_inicio);
+            paramCount++;
+        }
+        
+        // Se escolheu data final
+        if (data_fim) {
+            query += ` AND data_vencimento <= $${paramCount}`;
+            params.push(data_fim);
+            paramCount++;
+        }
+        
+        // Se digitou algo na barra de pesquisa
+        if (busca) {
+            query += ` AND descricao ILIKE $${paramCount}`;
+            params.push(`%${busca}%`);
+            paramCount++;
+        }
+
+        query += ` ORDER BY data_vencimento DESC LIMIT 200`; // Aumentamos o limite para 200 resultados
+        
+        const lista = await pool.query(query, params);
         res.json(lista.rows);
     } catch (e) {
+        console.error("Erro ao buscar lançamentos:", e);
         res.status(500).json({ erro: "Erro ao buscar lançamentos" });
     }
 });
