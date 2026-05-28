@@ -474,14 +474,25 @@ app.get('/api/caixa/resumo/:id', async (req, res) => {
 
 app.get('/api/caixa/historico', async (req, res) => {
   try {
-    const caixas = (await pool.query(`SELECT * FROM controle_caixa WHERE status = 'Fechado' AND TO_CHAR(data_fechamento, 'YYYY-MM') = $1 ORDER BY data_fechamento DESC`, [req.query.mes])).rows;
+    // 1. Corrige o fuso horário na busca do banco de dados (para o mês não virar meia-noite antes da hora)
+    const caixas = (await pool.query(`SELECT * FROM controle_caixa WHERE status = 'Fechado' AND TO_CHAR(data_fechamento AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM') = $1 ORDER BY data_fechamento DESC`, [req.query.mes])).rows;
     let historico = [];
     for (let c of caixas) {
         const vendasDinheiro = parseFloat((await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE forma_pagamento ILIKE '%dinheiro%' AND data_hora >= $1 AND data_hora <= $2`, [c.data_abertura, c.data_fechamento])).rows[0].total) || 0;
         const vendasCartao = parseFloat((await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE (forma_pagamento ILIKE '%cartão%' OR forma_pagamento ILIKE '%cartao%') AND data_hora >= $1 AND data_hora <= $2`, [c.data_abertura, c.data_fechamento])).rows[0].total) || 0;
         const vendasPix = parseFloat((await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE forma_pagamento ILIKE '%pix%' AND data_hora >= $1 AND data_hora <= $2`, [c.data_abertura, c.data_fechamento])).rows[0].total) || 0;
         const despesas = parseFloat((await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM movimentacoes_caixa WHERE caixa_id = $1 AND LOWER(TRIM(tipo)) = 'sangria'`, [c.id])).rows[0].total) || 0;
-        historico.push({ id: c.id, dataAbertura: c.data_abertura ? new Date(c.data_abertura).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'Sem registro', dataFechamento: c.data_fechamento ? new Date(c.data_fechamento).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'Sem registro', totalCartao: vendasCartao, totalDinheiro: vendasDinheiro, totalPix: vendasPix, totalDespesas: despesas });
+        
+        // 2. O PULO DO GATO: Forçamos a formatação em texto usando o fuso horário oficial de São Paulo / Brasília
+        historico.push({ 
+            id: c.id, 
+            dataAbertura: c.data_abertura ? new Date(c.data_abertura).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }) : 'Sem registro', 
+            dataFechamento: c.data_fechamento ? new Date(c.data_fechamento).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }) : 'Sem registro', 
+            totalCartao: vendasCartao, 
+            totalDinheiro: vendasDinheiro, 
+            totalPix: vendasPix, 
+            totalDespesas: despesas 
+        });
     }
     res.json(historico);
   } catch (e) { res.status(500).json({ erro: "Erro" }); }
