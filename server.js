@@ -380,8 +380,9 @@ app.get('/api/ranking', async (req, res) => {
 app.get('/api/caixa/status', async (req, res) => { try { res.json((await pool.query('SELECT * FROM controle_caixa ORDER BY id DESC LIMIT 1')).rows[0] || { status: 'Fechado' }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
 app.post('/api/caixa/abrir', async (req, res) => { try { res.json({ sucesso: true, caixa: (await pool.query("INSERT INTO controle_caixa (valor_inicial, status) VALUES ($1, 'Aberto') RETURNING *", [req.body.valor_inicial || 0])).rows[0] }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
 
+
 // ==========================================
-// 🔒 FECHAMENTO DE CAIXA COM INJEÇÃO FINANCEIRA (CONTA DE TRANSIÇÃO)
+// 🔒 FECHAMENTO DE CAIXA COM INJEÇÃO FINANCEIRA (CONTA DE TRANSIÇÃO E RETIRADAS)
 // ==========================================
 app.put('/api/caixa/fechar/:id', async (req, res) => {
     try {
@@ -412,14 +413,20 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
             }
         });
 
-        // 3. Garante que a Categoria "Invisível" (Conta Transitória) exista para não duplicar no DRE
+        // 3. 👇 NOVO: Busca todas as Retiradas (Sangrias) que ocorreram neste caixa
+        const retiradasQuery = await pool.query(`
+            SELECT valor, motivo FROM movimentacoes_caixa 
+            WHERE caixa_id = $1 AND LOWER(tipo) = 'sangria'
+        `, [caixa.id]);
+
+        // 4. Garante que a Categoria "Invisível" (Conta Transitória) exista para não duplicar no DRE
         let catResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'movimentacao_interna' LIMIT 1");
         if (catResult.rows.length === 0) {
             catResult = await pool.query("INSERT INTO fin_categorias (nome, tipo, dre_ref) VALUES ('Transferência / Fechamento', 'Receita', 'movimentacao_interna') RETURNING id");
         }
         const categoriaId = catResult.rows[0].id;
 
-        // 4. Garante que as contas de Banco existem
+        // 5. Garante que as contas de Banco existem
         let contaFisicoResult = await pool.query("SELECT id FROM fin_contas_bancarias WHERE nome ILIKE '%Caixa Físico%' LIMIT 1");
         if (contaFisicoResult.rows.length === 0) {
             contaFisicoResult = await pool.query("INSERT INTO fin_contas_bancarias (nome, saldo_inicial) VALUES ('Caixa Físico (Gaveta)', 0) RETURNING id");
@@ -432,10 +439,11 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
         }
         const contaTransicaoId = contaTransicaoResult.rows[0].id;
 
-        // 5. Injeta no Financeiro silenciosamente
+        // 6. Injeta no Financeiro silenciosamente
         const promessasLancamentos = [];
         const dataFormatada = new Date().toISOString().split('T')[0]; // Hoje
 
+        // A. Injeta as Vendas em Dinheiro
         if (totalDinheiro > 0) {
             promessasLancamentos.push(pool.query(`
                 INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
@@ -443,12 +451,21 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
             `, [`Fechamento de Caixa #${caixa.id} (Dinheiro)`, totalDinheiro, dataFormatada, categoriaId, contaFisicoId]));
         }
 
+        // B. Injeta as Vendas Digitais
         if (totalDigital > 0) {
             promessasLancamentos.push(pool.query(`
                 INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
                 VALUES ($1, $2, $3, 'Pago', 'Receita', $4, $5)
             `, [`Fechamento de Caixa #${caixa.id} (Cartões/Pix/Ifood)`, totalDigital, dataFormatada, categoriaId, contaTransicaoId]));
         }
+
+        // C. 👇 NOVO: Injeta as Retiradas como "Despesa" do Caixa Físico
+        retiradasQuery.rows.forEach(ret => {
+            promessasLancamentos.push(pool.query(`
+                INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
+                VALUES ($1, $2, $3, 'Pago', 'Despesa', $4, $5)
+            `, [`[Retirada] ${ret.motivo || 'Sangria de Caixa'}`, parseFloat(ret.valor), dataFormatada, categoriaId, contaFisicoId]));
+        });
 
         await Promise.all(promessasLancamentos);
 
