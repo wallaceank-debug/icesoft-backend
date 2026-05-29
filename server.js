@@ -236,17 +236,52 @@ app.post('/api/vendas', async (req, res) => {
                 const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
                 const config = configQuery.rows[0];
 
-                if (config && config.msg_recebido && config.msg_recebido.trim() !== '' && config.zap_url && config.zap_key && config.zap_instancia) {
+                if (config && config.zap_url && config.zap_key && config.zap_instancia) {
                     const primeiroNome = cliente_nome ? cliente_nome.split(' ')[0] : 'Cliente';
-                    const textoPronto = config.msg_recebido.replace(/{nome}/g, primeiroNome).replace(/{pedido}/g, numeroDiario || 'Novo');
-                    const telefoneLimpo = "55" + cliente_telefone.replace(/\D/g, '');
-                    const urlZap = config.zap_url.trim().replace(/\/$/, "");
-                    const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
+                    let textoPronto = '';
+                    let enviarMsg = false;
 
-                    fetch(`${urlZap}/message/sendText/${instanciaURL}`, {
-                        method: 'POST', headers: { 'apikey': config.zap_key.trim(), 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ number: telefoneLimpo, text: textoPronto })
-                    }).catch(err => console.log("⚠️ Erro msg recebido (Silenciado):", err.message));
+                    if (origemFinal.toLowerCase().includes('balcão') && status === 'Concluída' && config.msg_balcao && config.msg_balcao.trim() !== '') {
+                        textoPronto = config.msg_balcao.replace(/{nome}/g, primeiroNome).replace(/{pedido}/g, numeroDiario || 'Novo');
+                        enviarMsg = true;
+
+                        let resumo = `\n\n*🛒 Resumo da Compra:*\n`;
+                        try {
+                            const itensParsed = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
+                            itensParsed.forEach(item => { resumo += `▪️ ${item.quantidade || 1}x ${item.nome.replace('Delivery: ', '')} - R$ ${Number(item.preco).toFixed(2).replace('.', ',')}\n`; });
+                        } catch(e) {}
+                        resumo += `\n*💰 Total:* R$ ${Number(valorFinal).toFixed(2).replace('.', ',')}`;
+
+                        try {
+                            const countQuery = await pool.query("SELECT COUNT(*) FROM vendas WHERE cliente_telefone = $1 AND status NOT ILIKE '%cancelad%'", [cliente_telefone]);
+                            let pontosTotais = parseInt(countQuery.rows[0].count) || 1;
+                            let metaFidelidade = 10;
+                            let pontosAtuais = pontosTotais % metaFidelidade;
+                            if (pontosAtuais === 0 && pontosTotais > 0) pontosAtuais = metaFidelidade;
+                            let bolinhasVerdes = '🟢'.repeat(pontosAtuais);
+                            let bolinhasVermelhas = '🔴'.repeat(metaFidelidade - pontosAtuais);
+                            resumo += `\n\n🎁 *Seu Progresso de Fidelidade:*\n${bolinhasVerdes}${bolinhasVermelhas}\n`;
+                            if (pontosAtuais === metaFidelidade) {
+                                resumo += `🎉 *Parabéns!* Você completou sua cartela! O seu próximo pedido tem prêmio!`;
+                            } else {
+                                resumo += `Faltam apenas ${metaFidelidade - pontosAtuais} pedidos para o seu prêmio!`;
+                            }
+                        } catch(erroFid) {}
+                        textoPronto += resumo;
+                    } else if (config.msg_recebido && config.msg_recebido.trim() !== '') {
+                        textoPronto = config.msg_recebido.replace(/{nome}/g, primeiroNome).replace(/{pedido}/g, numeroDiario || 'Novo');
+                        enviarMsg = true;
+                    }
+
+                    if (enviarMsg) {
+                        const telefoneLimpo = "55" + cliente_telefone.replace(/\D/g, '');
+                        const urlZap = config.zap_url.trim().replace(/\/$/, "");
+                        const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
+                        fetch(`${urlZap}/message/sendText/${instanciaURL}`, {
+                            method: 'POST', headers: { 'apikey': config.zap_key.trim(), 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ number: telefoneLimpo, text: textoPronto })
+                        }).catch(err => console.log("⚠️ Erro msg recebido/balcao (Silenciado):", err.message));
+                    }
                 }
             } catch (errZap) {}
         }
@@ -616,10 +651,11 @@ app.get('/api/crm/clientes', async (req, res) => {
 pool.query(`
     CREATE TABLE IF NOT EXISTS integracoes_config (
         id SERIAL PRIMARY KEY, zap_url TEXT, zap_key TEXT, zap_instancia TEXT,
-        msg_boas_vindas TEXT, msg_recebido TEXT, msg_aceito TEXT, msg_entrega TEXT, msg_concluido TEXT
+        msg_boas_vindas TEXT, msg_recebido TEXT, msg_aceito TEXT, msg_entrega TEXT, msg_concluido TEXT, msg_balcao TEXT
     );
 `).then(async () => {
     await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS msg_recebido TEXT');
+    await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS msg_balcao TEXT');
     if ((await pool.query('SELECT * FROM integracoes_config')).rowCount === 0) await pool.query('INSERT INTO integracoes_config (zap_instancia) VALUES ($1)', ['IcesoftBot']);
 }).catch(console.error);
 
