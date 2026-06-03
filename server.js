@@ -93,7 +93,13 @@ pool.connect()
             CREATE TABLE IF NOT EXISTS cidades (id SERIAL PRIMARY KEY, nome VARCHAR(100) UNIQUE NOT NULL);
             CREATE TABLE IF NOT EXISTS bairros (id SERIAL PRIMARY KEY, nome VARCHAR(100) NOT NULL, taxa DECIMAL(10,2) NOT NULL DEFAULT 0.00, cidade VARCHAR(100) DEFAULT 'Quatis');
             CREATE TABLE IF NOT EXISTS mesas_ativas (id SERIAL PRIMARY KEY, numero VARCHAR(10) NOT NULL, itens JSONB DEFAULT '[]', status VARCHAR(20) DEFAULT 'Ocupada', data_abertura TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-            CREATE TABLE IF NOT EXISTS categorias (id SERIAL PRIMARY KEY, nome TEXT, ordem INTEGER, mostrar_cardapio BOOLEAN DEFAULT true);
+            
+            -- Tabela Atualizada com novos campos de agendamento:
+            CREATE TABLE IF NOT EXISTS categorias (
+                id SERIAL PRIMARY KEY, nome TEXT, ordem INTEGER, mostrar_cardapio BOOLEAN DEFAULT true,
+                dias_semana VARCHAR(50) DEFAULT '', hora_inicio VARCHAR(10) DEFAULT '', hora_fim VARCHAR(10) DEFAULT ''
+            );
+            
             CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, username VARCHAR(100) UNIQUE, senha VARCHAR(100), cargo VARCHAR(50) DEFAULT 'admin', email VARCHAR(255));
             INSERT INTO usuarios (username, senha, email, cargo) VALUES ('admin', 'icesoft123', 'admin@icesoft.com', 'admin') ON CONFLICT (username) DO NOTHING;
             
@@ -111,9 +117,6 @@ pool.connect()
             CREATE TABLE IF NOT EXISTS controle_caixa (id SERIAL PRIMARY KEY, valor_inicial DECIMAL(10,2), valor_informado DECIMAL(10,2), valor_sistema DECIMAL(10,2), data_abertura TIMESTAMP DEFAULT CURRENT_TIMESTAMP, data_fechamento TIMESTAMP, status VARCHAR(20));
             CREATE TABLE IF NOT EXISTS movimentacoes_caixa (id SERIAL PRIMARY KEY, caixa_id INTEGER, tipo VARCHAR(50), valor DECIMAL(10,2), motivo TEXT, data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
             
-            -- ==========================================
-            -- NOVAS TABELAS DO MÓDULO FINANCEIRO
-            -- ==========================================
             CREATE TABLE IF NOT EXISTS fin_contas_bancarias (
                 id SERIAL PRIMARY KEY, nome VARCHAR(100) NOT NULL, saldo_inicial DECIMAL(10,2) DEFAULT 0.00
             );
@@ -129,7 +132,13 @@ pool.connect()
             );
         `);
     })
-    .then(() => console.log("📦 Estrutura do Banco 100% Blindada e Pronta!"))
+    .then(async () => {
+        // 🛡️ Segurança: Atualiza as tabelas antigas para garantir que os campos existam
+        await pool.query("ALTER TABLE categorias ADD COLUMN IF NOT EXISTS dias_semana VARCHAR(50) DEFAULT ''");
+        await pool.query("ALTER TABLE categorias ADD COLUMN IF NOT EXISTS hora_inicio VARCHAR(10) DEFAULT ''");
+        await pool.query("ALTER TABLE categorias ADD COLUMN IF NOT EXISTS hora_fim VARCHAR(10) DEFAULT ''");
+        console.log("📦 Estrutura do Banco 100% Blindada e Pronta!");
+    })
     .catch(err => console.error('❌ Erro no banco:', err));
 
 
@@ -582,7 +591,31 @@ app.get('/api/categorias', async (req, res) => { try { res.json((await pool.quer
 app.post('/api/categorias', async (req, res) => { try { res.json({ sucesso: true, categoria: (await pool.query('INSERT INTO categorias (nome, ordem, mostrar_cardapio) VALUES ($1, $2, $3) RETURNING *', [req.body.nome, req.body.ordem || 0, req.body.mostrar_cardapio !== false])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
 app.delete('/api/categorias/:id', async (req, res) => { try { await pool.query('DELETE FROM categorias WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/categorias/ordem', async (req, res) => { try { for (let cat of req.body) { await pool.query('UPDATE categorias SET ordem = $1 WHERE id = $2', [cat.ordem, cat.id]); } res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro: "Erro"}); } });
-app.put('/api/categorias/:id', async (req, res) => { try { await pool.query('UPDATE categorias SET mostrar_cardapio = $1 WHERE id = $2', [req.body.mostrar_cardapio !== false, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
+
+app.put('/api/categorias/:id', async (req, res) => { 
+    try { 
+        const { nome, mostrar_cardapio, dias_semana, hora_inicio, hora_fim } = req.body;
+        
+        // Se a requisição enviar um 'nome', significa que veio do Modal Avançado. 
+        if (nome !== undefined) {
+            await pool.query(
+                'UPDATE categorias SET nome = $1, mostrar_cardapio = $2, dias_semana = $3, hora_inicio = $4, hora_fim = $5 WHERE id = $6', 
+                [nome, mostrar_cardapio !== false, dias_semana || '', hora_inicio || '', hora_fim || '', req.params.id]
+            );
+        } else {
+            // Se não enviou 'nome', é só o clique rápido da chavinha de visibilidade.
+            await pool.query(
+                'UPDATE categorias SET mostrar_cardapio = $1 WHERE id = $2', 
+                [req.body.mostrar_cardapio !== false, req.params.id]
+            );
+        }
+        res.json({ sucesso: true }); 
+    } catch (e) { 
+        console.error("Erro ao atualizar categoria:", e);
+        res.status(500).json({erro:"Erro ao atualizar"}); 
+    } 
+});
+
 app.get('/api/cidades', async (req, res) => { try { res.json((await pool.query('SELECT * FROM cidades ORDER BY nome ASC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.post('/api/cidades', async (req, res) => { try { res.json((await pool.query('INSERT INTO cidades (nome) VALUES ($1) ON CONFLICT (nome) DO NOTHING RETURNING *', [req.body.nome])).rows[0]); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.delete('/api/cidades/:id', async (req, res) => { try { await pool.query('DELETE FROM cidades WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
