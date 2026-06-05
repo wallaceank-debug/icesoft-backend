@@ -1023,16 +1023,40 @@ app.get('/api/financeiro/resumo', async (req, res) => {
     }
 });
 
-// 2. Criar um Novo Lançamento (Nova Receita / Nova Despesa)
+// 2. Criar um Novo Lançamento (Único, Parcelado ou Recorrente)
 app.post('/api/financeiro/lancamentos', async (req, res) => {
     try {
-        const { descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id } = req.body;
-        const novoLancamento = await pool.query(`
-            INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
-        `, [descricao, valor, data_vencimento, status || 'Pendente', tipo, categoria_id || null, conta_id || null]);
+        const { descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id, recorrencia_tipo, qtd_meses } = req.body;
         
-        res.status(201).json({ sucesso: true, lancamento: novoLancamento.rows[0] });
+        const tipoRec = recorrencia_tipo || 'unico';
+        const qtd = (tipoRec !== 'unico') ? (parseInt(qtd_meses) || 1) : 1;
+        
+        const promessas = [];
+        const [ano, mes, dia] = data_vencimento.split('-');
+        const dataBase = new Date(ano, mes - 1, dia);
+
+        for (let i = 0; i < qtd; i++) {
+            let descFinal = descricao;
+            let statusFinal = (i === 0) ? (status || 'Pendente') : 'Pendente'; // Só a 1ª parcela pode nascer "Paga"
+
+            if (tipoRec === 'parcelado') {
+                descFinal = `${descricao} (${i + 1}/${qtd})`;
+            }
+
+            // Calcula o mês correto da parcela
+            const novaData = new Date(dataBase.getFullYear(), dataBase.getMonth() + i, dataBase.getDate());
+            const dataStr = `${novaData.getFullYear()}-${String(novaData.getMonth() + 1).padStart(2, '0')}-${String(novaData.getDate()).padStart(2, '0')}`;
+
+            promessas.push(
+                pool.query(`
+                    INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id, recorrente)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *
+                `, [descFinal, valor, dataStr, statusFinal, tipo, categoria_id || null, conta_id || null, tipoRec !== 'unico'])
+            );
+        }
+        
+        await Promise.all(promessas);
+        res.status(201).json({ sucesso: true });
     } catch (e) {
         res.status(500).json({ erro: "Erro ao criar lançamento" });
     }
