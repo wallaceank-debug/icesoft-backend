@@ -25,11 +25,26 @@ const io = new Server(server, {
 });
 
 // 3. Monitora quem se conecta no 'Rádio'
-io.on('connection', (socket) => {
-    console.log(`🔌 Novo dispositivo conectado no Kanban: ${socket.id}`);
+let clientesNoCardapio = 0; // 📡 Memória do Radar
 
+io.on('connection', (socket) => {
+    console.log(`🔌 Novo dispositivo conectado: ${socket.id}`);
+
+    // Quando um cliente abre o Cardápio Digital
+    socket.on('entrou_no_cardapio', () => {
+        socket.isClienteCardapio = true; // Coloca um "crachá" invisível neste celular
+        clientesNoCardapio++;
+        io.emit('atualiza_clientes_online', clientesNoCardapio); // Grita no rádio para o PDV ouvir
+    });
+
+    // Quando o cliente fecha a aba ou o navegador
     socket.on('disconnect', () => {
          console.log(`❌ Dispositivo desconectado: ${socket.id}`);
+         if (socket.isClienteCardapio) {
+             clientesNoCardapio--;
+             if (clientesNoCardapio < 0) clientesNoCardapio = 0;
+             io.emit('atualiza_clientes_online', clientesNoCardapio); // Atualiza o PDV
+         }
     });
 });
 
