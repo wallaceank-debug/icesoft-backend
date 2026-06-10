@@ -1390,37 +1390,92 @@ app.put('/api/financeiro/bancos/:id', async (req, res) => {
 // 9. Dados para os Gráficos do Dashboard Financeiro
 app.get('/api/financeiro/graficos', async (req, res) => {
     try {
-        // 1. Receitas vs Despesas (Mês Atual)
-        const despesasQuery = await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM fin_lancamentos WHERE tipo = 'Despesa' AND EXTRACT(MONTH FROM data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)`);
-        const receitasQuery = await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM fin_lancamentos WHERE tipo = 'Receita' AND EXTRACT(MONTH FROM data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)`);
-        const vendasQuery = await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE status NOT ILIKE '%cancelad%' AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)`);
+        // 1. Receitas vs Despesas (Mês Atual) - IGNORANDO TRANSFERÊNCIAS (movimentacao_interna) E PEGANDO SÓ O PAGO
+        const despesasQuery = await pool.query(`
+            SELECT COALESCE(SUM(l.valor), 0) as total 
+            FROM fin_lancamentos l
+            JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE l.tipo = 'Despesa' AND l.status = 'Pago'
+            AND c.dre_ref != 'movimentacao_interna' 
+            AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+        `);
+        
+        const receitasQuery = await pool.query(`
+            SELECT COALESCE(SUM(l.valor), 0) as total 
+            FROM fin_lancamentos l
+            JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE l.tipo = 'Receita' AND l.status = 'Pago'
+            AND c.dre_ref != 'movimentacao_interna' 
+            AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+        `);
+        
+        const vendasQuery = await pool.query(`
+            SELECT COALESCE(SUM(valor_total), 0) as total 
+            FROM vendas 
+            WHERE status NOT ILIKE '%cancelad%' 
+            AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE) 
+            AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)
+        `);
 
+        // Total de Receitas limpo (sem dupla contagem do fechamento de caixa que gera "movimentacao_interna")
         const totalReceitas = parseFloat(receitasQuery.rows[0].total) + parseFloat(vendasQuery.rows[0].total);
         const totalDespesas = parseFloat(despesasQuery.rows[0].total);
 
-        // 2. Onde o dinheiro está indo? (Agrupado por Categoria do DRE)
+        // 2. Onde o dinheiro está indo? (Ignorando transferências e fechamentos)
         const despesasPorCategoria = await pool.query(`
             SELECT c.nome, SUM(l.valor) as total
             FROM fin_lancamentos l
             JOIN fin_categorias c ON l.categoria_id = c.id
-            WHERE l.tipo = 'Despesa' AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            WHERE l.tipo = 'Despesa' AND l.status = 'Pago'
+            AND c.dre_ref != 'movimentacao_interna'
+            AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
             GROUP BY c.nome
             ORDER BY total DESC
         `);
 
-        // 3. Canais de Venda (Qual origem dá mais dinheiro?)
+        // 3. Canais de Venda
         const canaisQuery = await pool.query(`
             SELECT origem, SUM(valor_total) as total
             FROM vendas
-            WHERE status NOT ILIKE '%cancelad%' AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)
+            WHERE status NOT ILIKE '%cancelad%' 
+            AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE) 
+            AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)
             GROUP BY origem
             ORDER BY total DESC
         `);
 
+        // 4. Inteligência do Ponto de Equilíbrio
+        const dreQuery = await pool.query(`
+            SELECT c.dre_ref, COALESCE(SUM(l.valor), 0) as total 
+            FROM fin_lancamentos l JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE l.status = 'Pago'
+            AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            GROUP BY c.dre_ref
+        `);
+        const dre = { deducoes: 0, cmv: 0, despesas_vendas: 0, despesas_operacionais: 0, despesas_financeiras: 0 };
+        dreQuery.rows.forEach(r => { if(dre[r.dre_ref] !== undefined) dre[r.dre_ref] = parseFloat(r.total); });
+        
+        const custosVariaveis = dre.deducoes + dre.cmv + dre.despesas_vendas;
+        const custosFixos = dre.despesas_operacionais + dre.despesas_financeiras;
+        
+        // Evita divisão por zero se não tiver receita ainda
+        let margemContribuicao = totalReceitas > 0 ? ((totalReceitas - custosVariaveis) / totalReceitas) : 0.3; 
+        if (margemContribuicao <= 0) margemContribuicao = 0.01;
+        
+        let pontoEquilibrio = custosFixos / margemContribuicao;
+        if (pontoEquilibrio === 0) pontoEquilibrio = 1000; // Valor apenas para formar o visual inicial
+        
+        const metaReceita = pontoEquilibrio * 1.30; // Sugere meta de lucro 30% acima da sobrevivência
+
         res.json({
             resumo_mes: { receitas: totalReceitas, despesas: totalDespesas },
             despesas_pizza: despesasPorCategoria.rows,
-            canais_venda: canaisQuery.rows
+            canais_venda: canaisQuery.rows,
+            ponto_equilibrio: { pe: pontoEquilibrio, meta: metaReceita, atual: totalReceitas }
         });
     } catch (e) {
         console.error("Erro nos gráficos:", e);
