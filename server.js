@@ -1651,7 +1651,6 @@ app.get('/api/financeiro/fluxo-caixa', async (req, res) => {
 });
 
 // 12. Executar Transferência entre Contas com Dedução de Taxas (Auditoria)
-// 12. Executar Transferência entre Contas com Dedução de Taxas (Auditoria)
 app.post('/api/financeiro/transferencias', async (req, res) => {
     try {
         const { conta_origem_id, conta_destino_id, valor_bruto, taxa, descricao, data_transferencia } = req.body;
@@ -1703,6 +1702,99 @@ app.post('/api/financeiro/transferencias', async (req, res) => {
         await pool.query('ROLLBACK');
         console.error("Erro na transferência:", e);
         res.status(500).json({ erro: "Erro ao processar transferência" });
+    }
+});
+
+// ==========================================
+// 13. CENTRAL DE ALERTAS INTELIGENTES (CFO VIRTUAL)
+// ==========================================
+app.get('/api/financeiro/alertas', async (req, res) => {
+    try {
+        // 1. Dados do DRE (Mês Atual)
+        const queryDRE = `
+            SELECT c.dre_ref, COALESCE(SUM(l.valor), 0) as total 
+            FROM fin_lancamentos l JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            AND l.status = 'Pago'
+            GROUP BY c.dre_ref
+        `;
+        const resDRE = await pool.query(queryDRE);
+        const dre = { cmv: 0, despesas_operacionais: 0, despesas_financeiras: 0, deducoes: 0, despesas_vendas: 0 };
+        resDRE.rows.forEach(r => { if(dre[r.dre_ref] !== undefined) dre[r.dre_ref] = parseFloat(r.total); });
+        
+        // 2. Faturamento Bruto e Ticket Médio
+        const vendasMes = await pool.query("SELECT COALESCE(SUM(valor_total), 0) as total, COUNT(*) as qtd FROM vendas WHERE status NOT ILIKE '%cancelad%' AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)");
+        const faturamentoPDV = parseFloat(vendasMes.rows[0].total);
+        const qtdPedidos = parseInt(vendasMes.rows[0].qtd) || 1;
+        
+        const receitasManuais = await pool.query("SELECT COALESCE(SUM(l.valor), 0) as total FROM fin_lancamentos l JOIN fin_categorias c ON l.categoria_id = c.id WHERE l.tipo = 'Receita' AND l.status = 'Pago' AND c.dre_ref != 'movimentacao_interna' AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)");
+        const faturamentoTotal = faturamentoPDV + parseFloat(receitasManuais.rows[0].total);
+        const ticketMedio = faturamentoTotal / qtdPedidos;
+
+        // 3. Saldo em Bancos (Excluindo Caixa Físico/Gaveta)
+        const bancos = await pool.query(`
+            SELECT b.saldo_inicial,
+            COALESCE((SELECT SUM(valor) FROM fin_lancamentos WHERE conta_id = b.id AND tipo = 'Receita' AND status = 'Pago'), 0) as entradas,
+            COALESCE((SELECT SUM(valor) FROM fin_lancamentos WHERE conta_id = b.id AND tipo = 'Despesa' AND status = 'Pago'), 0) as saidas
+            FROM fin_contas_bancarias b
+            WHERE b.nome NOT ILIKE '%Caixa Físico%' AND b.nome NOT ILIKE '%Gaveta%'
+        `);
+        let saldoCaixa = 0;
+        bancos.rows.forEach(b => saldoCaixa += parseFloat(b.saldo_inicial) + parseFloat(b.entradas) - parseFloat(b.saidas));
+
+        // 4. Montagem dos Alertas
+        const alertas = [];
+        
+        // A) Termômetro do CMV
+        let pctCMV = faturamentoTotal > 0 ? (dre.cmv / faturamentoTotal) * 100 : 0;
+        if (pctCMV > 35) {
+            alertas.push({ tipo: 'perigo', icone: 'soup_kitchen', titulo: `CMV Elevado (${pctCMV.toFixed(1)}%)`, texto: 'Seus custos com ingredientes/embalagens estão muito altos. O ideal é abaixo de 35%. Negocie com fornecedores urgentemente!' });
+        } else if (pctCMV > 0 && pctCMV <= 35) {
+            alertas.push({ tipo: 'sucesso', icone: 'verified', titulo: `CMV Saudável (${pctCMV.toFixed(1)}%)`, texto: 'Seus custos com insumos estão controlados perfeitamente dentro da margem ideal.' });
+        }
+
+        // B) Radar de Custos Fixos
+        const custosFixos = dre.despesas_operacionais + dre.despesas_financeiras;
+        let pctFixos = faturamentoTotal > 0 ? (custosFixos / faturamentoTotal) * 100 : 0;
+        if (pctFixos > 30 && faturamentoTotal > 0) {
+            alertas.push({ tipo: 'alerta', icone: 'domain', titulo: `Custos Fixos Altos (${pctFixos.toFixed(1)}%)`, texto: 'O custo para manter as portas abertas está engolindo sua margem. O ideal é abaixo de 25%. Aumente o volume de vendas!' });
+        } else if (pctFixos > 0) {
+            alertas.push({ tipo: 'sucesso', icone: 'domain_verification', titulo: 'Custos Fixos Controlados', texto: 'Sua estrutura está enxuta e adequada para o seu volume de vendas mensal.' });
+        }
+
+        // C) Fôlego de Caixa (Capital de Giro)
+        if (custosFixos > 0) {
+            const mesesFolego = saldoCaixa / custosFixos;
+            const diasFolego = Math.max(0, Math.round(mesesFolego * 30));
+            if (diasFolego < 30) {
+                alertas.push({ tipo: 'perigo', icone: 'warning', titulo: `Fôlego Crítico (${diasFolego} dias)`, texto: 'Com o saldo nos bancos, a empresa sobrevive menos de 1 mês. Segure gastos não essenciais imediatamente!' });
+            } else if (diasFolego < 90) {
+                alertas.push({ tipo: 'alerta', icone: 'health_and_safety', titulo: `Fôlego de Caixa (${diasFolego} dias)`, texto: 'Você tem caixa para cobrir de 1 a 3 meses. Continue poupando sua reserva de segurança.' });
+            } else {
+                alertas.push({ tipo: 'sucesso', icone: 'account_balance', titulo: `Fôlego Seguro (${diasFolego} dias)`, texto: 'Caixa blindado! Você sobrevive mais de 3 meses mesmo se não faturar nada.' });
+            }
+        }
+
+        // D) Acelerador de Ticket Médio vs Ponto de Equilíbrio
+        const custosVariaveis = dre.deducoes + dre.cmv + dre.despesas_vendas;
+        let margemContribuicao = faturamentoTotal > 0 ? ((faturamentoTotal - custosVariaveis) / faturamentoTotal) : 0.3;
+        if (margemContribuicao <= 0) margemContribuicao = 0.01;
+        const pontoEquilibrio = custosFixos / margemContribuicao;
+
+        if (faturamentoTotal < pontoEquilibrio) {
+            const falta = pontoEquilibrio - faturamentoTotal;
+            const tk = ticketMedio > 0 ? ticketMedio : 25;
+            const clientesFaltam = Math.ceil(falta / tk);
+            alertas.push({ tipo: 'dica', icone: 'rocket_launch', titulo: 'Meta de Empate Operacional', texto: `Faltam R$ ${falta.toFixed(2).replace('.', ',')} para pagar as contas do mês. Precisamos de ${clientesFaltam} clientes gastando R$ ${tk.toFixed(2).replace('.', ',')}. Ofereça adicionais!` });
+        } else {
+             alertas.push({ tipo: 'sucesso', icone: 'moving', titulo: 'Ponto de Equilíbrio Superado', texto: 'Todas as contas fixas do mês já estão pagas. Tudo que vender a partir de agora gera lucro limpo no caixa!' });
+        }
+
+        res.json(alertas);
+    } catch (e) {
+        console.error("Erro nos alertas:", e);
+        res.status(500).json({ erro: "Erro ao gerar alertas" });
     }
 });
 
