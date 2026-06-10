@@ -314,17 +314,78 @@ app.post('/api/vendas', async (req, res) => {
     } catch (erroGeral) { res.status(500).json({ erro: "Erro interno" }); }
 });
         
+// ==========================================
+// 🛑 ATUALIZAR STATUS DA VENDA (COM DEVOLUÇÃO DE ESTOQUE E ESTORNO FINANCEIRO)
+// ==========================================
 app.put('/api/vendas/:id/status', async (req, res) => { 
     try { 
         const novoStatus = req.body.status;
         const idVenda = req.params.id;
 
-        await pool.query("UPDATE vendas SET status = $1 WHERE id = $2", [novoStatus, idVenda]); 
-        res.json({ sucesso: true }); 
-
+        // 1. Pega a venda ANTES de alterar para saber os itens e valores
         const vendaQuery = await pool.query("SELECT * FROM vendas WHERE id = $1", [idVenda]);
         const venda = vendaQuery.rows[0];
 
+        // 2. Altera o status no banco
+        await pool.query("UPDATE vendas SET status = $1 WHERE id = $2", [novoStatus, idVenda]); 
+        res.json({ sucesso: true }); 
+
+        // ==========================================
+        // 🛡️ MÁGICA DA AUDITORIA: ESTORNO E ESTOQUE
+        // ==========================================
+        if (novoStatus.toLowerCase().includes('cancelad') && venda) {
+            // A. Devolve os produtos para o estoque
+            try {
+                let itensComprados = typeof venda.itens === 'string' ? JSON.parse(venda.itens) : (venda.itens || []);
+                const queryEstoque = await pool.query("SELECT id, nome, estoque FROM produtos");
+                let produtosNoBanco = queryEstoque.rows.sort((a, b) => b.nome.length - a.nome.length);
+
+                for (let item of itensComprados) {
+                    let qtd = item.quantidade ? Number(item.quantidade) : 1;
+                    let nomeRaw = item.nome || item.produto_nome || item.nomeBase || "";
+                    if (typeof nomeRaw === 'string' && nomeRaw.trim() !== "") {
+                        let nomeBusca = nomeRaw.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+                        let p = produtosNoBanco.find(prod => {
+                            let nomeBD = prod.nome.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+                            return nomeBusca.includes(nomeBD);
+                        });
+                        if (p && p.estoque !== null) {
+                            let novoEstoque = Number(p.estoque) + qtd; // DEVOLVE PARA O ESTOQUE!
+                            await pool.query("UPDATE produtos SET estoque = $1, ativo = true WHERE id = $2", [novoEstoque, p.id]);
+                        }
+                    }
+                }
+            } catch(e) { console.error("Erro no estoque do estorno:", e); }
+
+            // B. Estorno Financeiro Inteligente (Verifica a máquina do tempo do caixa)
+            try {
+                const caixaQuery = await pool.query("SELECT status FROM controle_caixa WHERE data_abertura <= $1 AND (data_fechamento >= $1 OR data_fechamento IS NULL) ORDER BY id DESC LIMIT 1", [venda.data_hora]);
+                if (caixaQuery.rows.length > 0 && caixaQuery.rows[0].status === 'Fechado') {
+                    let catResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'deducoes' LIMIT 1");
+                    const catId = catResult.rows[0]?.id;
+                    
+                    let contaId = null;
+                    if (venda.forma_pagamento.toLowerCase().includes('dinheiro')) {
+                        const c = await pool.query("SELECT id FROM fin_contas_bancarias WHERE nome ILIKE '%Caixa Físico%' LIMIT 1");
+                        if(c.rows.length>0) contaId = c.rows[0].id;
+                    } else {
+                        const c = await pool.query("SELECT id FROM fin_contas_bancarias WHERE nome ILIKE '%Transição%' LIMIT 1");
+                        if(c.rows.length>0) contaId = c.rows[0].id;
+                    }
+
+                    const dataFormatada = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+                    await pool.query(`
+                        INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
+                        VALUES ($1, $2, $3, 'Pago', 'Despesa', $4, $5)
+                    `, [`[Estorno] Cancelamento Pedido #${venda.id}`, venda.valor_total, dataFormatada, catId, contaId]);
+                }
+            } catch(e) { console.error("Erro no estorno financeiro:", e); }
+        }
+        // ==========================================
+
+        // ==========================================
+        // MENSAGERIA DE WHATSAPP (MANTIDO INTACTO)
+        // ==========================================
         if (venda && venda.cliente_telefone && venda.cliente_telefone.trim() !== '') {
             const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
             const config = configQuery.rows[0];
@@ -351,21 +412,13 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                         else resumo += `\n*🏬 Retirada na Loja*`;
                         if (venda.observacoes && venda.observacoes.trim() !== '') resumo += `\n*📝 Obs:* ${venda.observacoes}`;
 
-                        // ==========================================
-                        // 🟢 INÍCIO DA MÁGICA DA FIDELIDADE
-                        // ==========================================
                         try {
-                            // Conta quantos pedidos válidos esse número já fez na loja
                             const countQuery = await pool.query("SELECT COUNT(*) FROM vendas WHERE cliente_telefone = $1 AND status NOT ILIKE '%cancelad%'", [venda.cliente_telefone]);
                             let pontosTotais = parseInt(countQuery.rows[0].count) || 1;
-                            let metaFidelidade = 10; // 🎯 Defina a meta aqui (10 pedidos)
-                            
-                            // Matemática inteligente: se ele tem 13 pontos, ele está no pedido 3 da cartela nova.
+                            let metaFidelidade = 10; 
                             let pontosAtuais = pontosTotais % metaFidelidade; 
-                            // Se bater exatos 10, 20, 30... a conta acima dá zero, então forçamos a mostrar a barra cheia (10)
                             if (pontosAtuais === 0 && pontosTotais > 0) pontosAtuais = metaFidelidade;
 
-                            // Desenha as bolinhas automaticamente
                             let bolinhasVerdes = '🟢'.repeat(pontosAtuais);
                             let bolinhasVermelhas = '🔴'.repeat(metaFidelidade - pontosAtuais);
 
@@ -379,9 +432,6 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                         } catch(erroFid) {
                             console.error("Erro ao calcular fidelidade:", erroFid);
                         }
-                        // ==========================================
-                        // 🔴 FIM DA MÁGICA DA FIDELIDADE
-                        // ==========================================
 
                         textoPronto += resumo;
                     }
@@ -401,13 +451,49 @@ app.put('/api/vendas/:id/status', async (req, res) => {
 });
 
 // ==========================================
-// 💳 NOVA ROTA: ATUALIZAR FORMA DE PAGAMENTO
+// 💳 CORRIGIR FORMA DE PAGAMENTO (AUDITORIA INTELIGENTE)
 // ==========================================
 app.put('/api/vendas/:id/pagamento', async (req, res) => {
     try {
         const { forma_pagamento } = req.body;
+        
+        // 1. Pega a venda ANTES de alterar para comparar as formas de pagamento
+        const vendaQuery = await pool.query("SELECT * FROM vendas WHERE id = $1", [req.params.id]);
+        const venda = vendaQuery.rows[0];
+        if (!venda) return res.status(404).json({erro: "Venda não encontrada"});
+
+        // 2. Salva a nova forma de pagamento
         await pool.query("UPDATE vendas SET forma_pagamento = $1 WHERE id = $2", [forma_pagamento, req.params.id]);
         res.json({ sucesso: true });
+
+        // 🛡️ MÁGICA DA AUDITORIA: Transferência retroativa de saldo
+        try {
+            const caixaQuery = await pool.query("SELECT status FROM controle_caixa WHERE data_abertura <= $1 AND (data_fechamento >= $1 OR data_fechamento IS NULL) ORDER BY id DESC LIMIT 1", [venda.data_hora]);
+            if (caixaQuery.rows.length > 0 && caixaQuery.rows[0].status === 'Fechado') {
+                // O caixa já tinha fechado. Precisamos mover o dinheiro manualmente!
+                const eraDinheiro = venda.forma_pagamento.toLowerCase().includes('dinheiro');
+                const virouDinheiro = forma_pagamento.toLowerCase().includes('dinheiro');
+                
+                if (eraDinheiro !== virouDinheiro) {
+                    const contaFisico = (await pool.query("SELECT id FROM fin_contas_bancarias WHERE nome ILIKE '%Caixa Físico%' LIMIT 1")).rows[0]?.id;
+                    const contaTrans = (await pool.query("SELECT id FROM fin_contas_bancarias WHERE nome ILIKE '%Transição%' LIMIT 1")).rows[0]?.id;
+                    let catResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'movimentacao_interna' LIMIT 1");
+                    const catId = catResult.rows[0]?.id;
+                    const dataFormatada = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+
+                    if (eraDinheiro && !virouDinheiro) {
+                        // Tira do Físico (Despesa), põe na Transição (Receita)
+                        await pool.query("INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id) VALUES ($1, $2, $3, 'Pago', 'Despesa', $4, $5)", [`[Auditoria] Correção Pagamento #${venda.id}`, venda.valor_total, dataFormatada, catId, contaFisico]);
+                        await pool.query("INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id) VALUES ($1, $2, $3, 'Pago', 'Receita', $4, $5)", [`[Auditoria] Correção Pagamento #${venda.id}`, venda.valor_total, dataFormatada, catId, contaTrans]);
+                    } else if (!eraDinheiro && virouDinheiro) {
+                        // Tira da Transição (Despesa), põe no Físico (Receita)
+                        await pool.query("INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id) VALUES ($1, $2, $3, 'Pago', 'Despesa', $4, $5)", [`[Auditoria] Correção Pagamento #${venda.id}`, venda.valor_total, dataFormatada, catId, contaTrans]);
+                        await pool.query("INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id) VALUES ($1, $2, $3, 'Pago', 'Receita', $4, $5)", [`[Auditoria] Correção Pagamento #${venda.id}`, venda.valor_total, dataFormatada, catId, contaFisico]);
+                    }
+                }
+            }
+        } catch(e) { console.error("Erro na auditoria de pagamento", e); }
+
     } catch (e) {
         console.error("Erro ao atualizar pagamento:", e);
         res.status(500).json({ erro: "Erro ao atualizar pagamento" });
