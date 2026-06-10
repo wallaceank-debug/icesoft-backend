@@ -473,10 +473,11 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
             }
         });
 
-        // 3. 👇 NOVO: Busca todas as Retiradas (Sangrias) que ocorreram neste caixa
-        const retiradasQuery = await pool.query(`
-            SELECT valor, motivo FROM movimentacoes_caixa 
-            WHERE caixa_id = $1 AND LOWER(tipo) = 'sangria'
+        // 3. 👇 NOVO: Busca TODAS as movimentações (Sangrias e Suprimentos) deste caixa
+        await pool.query("ALTER TABLE movimentacoes_caixa ADD COLUMN IF NOT EXISTS categoria_id INTEGER");
+        const movQuery = await pool.query(`
+            SELECT tipo, valor, motivo, categoria_id FROM movimentacoes_caixa 
+            WHERE caixa_id = $1
         `, [caixa.id]);
 
         // 4. Garante que a Categoria "Invisível" (Conta Transitória) exista para não duplicar no DRE
@@ -519,12 +520,18 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
             `, [`Fechamento de Caixa #${caixa.id} (Cartões/Pix/Ifood)`, totalDigital, dataFormatada, categoriaId, contaTransicaoId]));
         }
 
-        // C. 👇 NOVO: Injeta as Retiradas como "Despesa" do Caixa Físico
-        retiradasQuery.rows.forEach(ret => {
+        // C. 👇 NOVO E MELHORADO: Injeta Sangrias e Suprimentos com as categorias corretas (Estilo Yampa)
+        movQuery.rows.forEach(mov => {
+            const ehSangria = mov.tipo.toLowerCase() === 'sangria';
+            const tipoFin = ehSangria ? 'Despesa' : 'Receita';
+            const desc = ehSangria ? `[Sangria] ${mov.motivo || 'Retirada de Caixa'}` : `[Suprimento] ${mov.motivo || 'Entrada de Caixa'}`;
+            // Se o caixa não escolheu categoria, cai na Oculta (movimentacao_interna)
+            const catParaUsar = mov.categoria_id ? mov.categoria_id : categoriaId; 
+
             promessasLancamentos.push(pool.query(`
                 INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
-                VALUES ($1, $2, $3, 'Pago', 'Despesa', $4, $5)
-            `, [`[Retirada] ${ret.motivo || 'Sangria de Caixa'}`, parseFloat(ret.valor), dataFormatada, categoriaId, contaFisicoId]));
+                VALUES ($1, $2, $3, 'Pago', $4, $5, $6)
+            `, [desc, parseFloat(mov.valor), dataFormatada, tipoFin, catParaUsar, contaFisicoId]));
         });
 
         await Promise.all(promessasLancamentos);
@@ -536,7 +543,20 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
     }
 });
 
-app.post('/api/caixa/movimentacao', async (req, res) => { try { res.json({ sucesso: true, movimentacao: (await pool.query("INSERT INTO movimentacoes_caixa (caixa_id, tipo, valor, motivo) VALUES ($1, $2, $3, $4) RETURNING *", [req.body.caixa_id, req.body.tipo, req.body.valor, req.body.motivo])).rows[0] }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
+app.post('/api/caixa/movimentacao', async (req, res) => { 
+    try { 
+        // 🛡️ Garante que a coluna da categoria exista no banco
+        await pool.query("ALTER TABLE movimentacoes_caixa ADD COLUMN IF NOT EXISTS categoria_id INTEGER");
+        res.json({ 
+            sucesso: true, 
+            movimentacao: (await pool.query(
+                "INSERT INTO movimentacoes_caixa (caixa_id, tipo, valor, motivo, categoria_id) VALUES ($1, $2, $3, $4, $5) RETURNING *", 
+                [req.body.caixa_id, req.body.tipo, req.body.valor, req.body.motivo, req.body.categoria_id || null]
+            )).rows[0] 
+        }); 
+    } catch (e) { res.status(500).json({ erro: "Erro" }); } 
+});
+
 app.get('/api/caixa/resumo/:id', async (req, res) => {
     try {
         const caixa = (await pool.query('SELECT * FROM controle_caixa WHERE id = $1', [req.params.id])).rows[0];
