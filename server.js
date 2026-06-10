@@ -442,11 +442,11 @@ app.post('/api/caixa/abrir', async (req, res) => { try { res.json({ sucesso: tru
 
 
 // ==========================================
-// 🔒 FECHAMENTO DE CAIXA COM INJEÇÃO FINANCEIRA (CONTA DE TRANSIÇÃO E RETIRADAS)
+// 🔒 FECHAMENTO DE CAIXA COM INJEÇÃO FINANCEIRA (CONTA DE TRANSIÇÃO, RETIRADAS E SUPRIMENTOS)
 // ==========================================
 app.put('/api/caixa/fechar/:id', async (req, res) => {
     try {
-        // 1. Fecha o caixa e captura a data exata
+        // 1. Fecha o caixa e captura a data exata no banco de dados
         const resultCaixa = await pool.query(
             "UPDATE controle_caixa SET status = 'Fechado', data_fechamento = CURRENT_TIMESTAMP, valor_informado = $1, valor_sistema = $2 WHERE id = $3 RETURNING *",
             [req.body.valor_informado || 0, req.body.valor_sistema || 0, req.params.id]
@@ -473,7 +473,7 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
             }
         });
 
-        // 3. 👇 NOVO: Busca TODAS as movimentações (Sangrias e Suprimentos) deste caixa
+        // 3. 👇 BUSCA TODAS AS MOVIMENTAÇÕES (Sangrias e Suprimentos) deste caixa
         await pool.query("ALTER TABLE movimentacoes_caixa ADD COLUMN IF NOT EXISTS categoria_id INTEGER");
         const movQuery = await pool.query(`
             SELECT tipo, valor, motivo, categoria_id FROM movimentacoes_caixa 
@@ -502,7 +502,9 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
 
         // 6. Injeta no Financeiro silenciosamente
         const promessasLancamentos = [];
-        const dataFormatada = new Date().toISOString().split('T')[0]; // Hoje
+
+        // 🛡️ A VACINA ANTI-FUSO HORÁRIO: Extrai a data baseando-se estritamente no fuso de São Paulo/Brasília
+        const dataFormatada = new Date(caixa.data_fechamento).toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // Resulta sempre em "YYYY-MM-DD" perfeito
 
         // A. Injeta as Vendas em Dinheiro
         if (totalDinheiro > 0) {
@@ -520,12 +522,11 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
             `, [`Fechamento de Caixa #${caixa.id} (Cartões/Pix/Ifood)`, totalDigital, dataFormatada, categoriaId, contaTransicaoId]));
         }
 
-        // C. 👇 NOVO E MELHORADO: Injeta Sangrias e Suprimentos com as categorias corretas (Estilo Yampa)
+        // C. Injeta Sangrias e Suprimentos com as categorias corretas (Estilo Yampa)
         movQuery.rows.forEach(mov => {
             const ehSangria = mov.tipo.toLowerCase() === 'sangria';
             const tipoFin = ehSangria ? 'Despesa' : 'Receita';
             const desc = ehSangria ? `[Sangria] ${mov.motivo || 'Retirada de Caixa'}` : `[Suprimento] ${mov.motivo || 'Entrada de Caixa'}`;
-            // Se o caixa não escolheu categoria, cai na Oculta (movimentacao_interna)
             const catParaUsar = mov.categoria_id ? mov.categoria_id : categoriaId; 
 
             promessasLancamentos.push(pool.query(`
