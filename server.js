@@ -1442,6 +1442,7 @@ app.get('/api/financeiro/fluxo-caixa', async (req, res) => {
 });
 
 // 12. Executar Transferência entre Contas com Dedução de Taxas (Auditoria)
+// 12. Executar Transferência entre Contas com Dedução de Taxas (Auditoria)
 app.post('/api/financeiro/transferencias', async (req, res) => {
     try {
         const { conta_origem_id, conta_destino_id, valor_bruto, taxa, descricao, data_transferencia } = req.body;
@@ -1449,9 +1450,10 @@ app.post('/api/financeiro/transferencias', async (req, res) => {
         const vBruto = parseFloat(valor_bruto);
         const vTaxa = parseFloat(taxa) || 0;
         const vLiquido = vBruto - vTaxa;
-        const dataAtual = new Date().toISOString().split('T')[0];
-
+        
+        // 👇 Agora sim, apenas UMA declaração inteligente da data:
         const dataAtual = data_transferencia || new Date().toISOString().split('T')[0];
+
         // 1. Procura ou cria a categoria de movimentação interna (para o DRE ignorar o saldo principal)
         let catResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'movimentacao_interna' LIMIT 1");
         if (catResult.rows.length === 0) {
