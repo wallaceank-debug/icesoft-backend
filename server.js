@@ -1194,6 +1194,9 @@ app.post('/api/financeiro/categorias', async (req, res) => {
         const { nome, tipo, dre_ref } = req.body;
         if (!nome || !tipo || !dre_ref) return res.status(400).json({ erro: "Dados incompletos" });
 
+        // 🛡️ VACINA ANTI-ERRO 500: Garante que a coluna 'ordem' exista no banco antes de inserir!
+        await pool.query("ALTER TABLE fin_categorias ADD COLUMN IF NOT EXISTS ordem INTEGER DEFAULT 0");
+
         const maxOrdem = await pool.query("SELECT COALESCE(MAX(ordem), 0) + 1 as proximo FROM fin_categorias");
         const proximaOrdem = maxOrdem.rows[0].proximo;
 
@@ -1203,6 +1206,7 @@ app.post('/api/financeiro/categorias', async (req, res) => {
         );
         res.status(201).json({ sucesso: true });
     } catch (e) {
+        console.error("Erro interno ao criar categoria:", e); // Agora o log vai avisar o erro real
         res.status(500).json({ erro: "Erro ao criar categoria" });
     }
 });
@@ -1210,11 +1214,15 @@ app.post('/api/financeiro/categorias', async (req, res) => {
 // 5.2 Salvar Reordenação de Categorias (Bulk Update Drag and Drop)
 app.put('/api/financeiro/categorias/ordem', async (req, res) => {
     try {
+        // 🛡️ VACINA ANTI-ERRO 500: Garante a coluna antes de arrastar e soltar
+        await pool.query("ALTER TABLE fin_categorias ADD COLUMN IF NOT EXISTS ordem INTEGER DEFAULT 0");
+
         for (let cat of req.body) {
             await pool.query('UPDATE fin_categorias SET ordem = $1 WHERE id = $2', [cat.ordem, cat.id]);
         }
         res.json({ sucesso: true });
     } catch (e) {
+        console.error("Erro interno ao reordenar:", e);
         res.status(500).json({ erro: "Erro ao reordenar" });
     }
 });
