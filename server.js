@@ -1150,39 +1150,82 @@ app.delete('/api/financeiro/lancamentos/:id', async (req, res) => {
     }
 });
 
-// 5. Buscar Categorias (Plano de Contas)
+// 5. Buscar Categorias Ordenadas por Drag-and-Drop
 app.get('/api/financeiro/categorias', async (req, res) => {
     try {
+        // Garante que a coluna ordem exista para suportar o arrasta-e-solta
+        await pool.query("ALTER TABLE fin_categorias ADD COLUMN IF NOT EXISTS ordem INTEGER DEFAULT 0");
+        
         const check = await pool.query('SELECT COUNT(*) FROM fin_categorias');
-        if (parseInt(check.rows[0].count) < 19) {
-            await pool.query('DELETE FROM fin_categorias');
+        if (parseInt(check.rows[0].count) === 0) { // 🚀 AGORA SÓ INJETA SE ESTIVER TOTALMENTE VAZIO
             await pool.query(`
-                INSERT INTO fin_categorias (nome, tipo, dre_ref) VALUES
-                ('1.1. Receita Loja Física (Balcão/Mesa)', 'Receita', 'receita_bruta'),
-                ('1.2. Receita Delivery (iFood, WhatsApp)', 'Receita', 'receita_bruta'),
-                ('1.3. Receita de Eventos / Encomendas', 'Receita', 'receita_bruta'),
-                ('2.1. Deduções: Impostos e Taxas (DAS, Cartão)', 'Despesa', 'deducoes'),
-                ('2.2. CMV: Insumos e Bases (Leite, Açaí)', 'Despesa', 'cmv'),
-                ('2.2. CMV: Embalagens', 'Despesa', 'cmv'),
-                ('2.2. CMV: Revenda (Bebidas, Terceiros)', 'Despesa', 'cmv'),
-                ('2.3. Despesas de Entrega (Motoboy/Logística)', 'Despesa', 'despesas_vendas'),
-                ('3.1. Ocupação e Utilidades (Aluguel, Energia, Água)', 'Despesa', 'despesas_operacionais'),
-                ('3.2. Pessoal (Pró-labore, Salários, Encargos)', 'Despesa', 'despesas_operacionais'),
-                ('3.3. Marketing e Vendas (Anúncios, Gráfica)', 'Despesa', 'despesas_vendas'),
-                ('3.4. Administrativo (Sistemas, Contador, Limpeza)', 'Despesa', 'despesas_operacionais'),
-                ('3.5. Manutenção e Conservação (Máquinas)', 'Despesa', 'despesas_operacionais'),
-                ('4.1. Investimentos: Máquinas e Obras', 'Despesa', 'investimentos'),
-                ('4.2. Investimentos: Informática e Móveis', 'Despesa', 'investimentos'),
-                ('5.1. Pagamento de Empréstimos e Juros', 'Despesa', 'nao_operacional'),
-                ('5.2. Tarifas Bancárias', 'Despesa', 'despesas_financeiras'),
-                ('5.3. Distribuição de Lucros', 'Despesa', 'distribuicao_lucros'),
-                ('5.4. Aportes de Capital / Investimento', 'Receita', 'aporte_capital')
+                INSERT INTO fin_categorias (nome, tipo, dre_ref, ordem) VALUES
+                ('1.1. Receita Loja Física (Balcão/Mesa)', 'Receita', 'receita_bruta', 1),
+                ('1.2. Receita Delivery (iFood, WhatsApp)', 'Receita', 'receita_bruta', 2),
+                ('1.3. Receita de Eventos / Encomendas', 'Receita', 'receita_bruta', 3),
+                ('2.1. Deduções: Impostos e Taxas (DAS, Cartão)', 'Despesa', 'deducoes', 4),
+                ('2.2. CMV: Insumos e Bases (Leite, Açaí)', 'Despesa', 'cmv', 5),
+                ('2.2. CMV: Embalagens', 'Despesa', 'cmv', 6),
+                ('2.2. CMV: Revenda (Bebidas, Terceiros)', 'Despesa', 'cmv', 7),
+                ('2.3. Despesas de Entrega (Motoboy/Logística)', 'Despesa', 'despesas_vendas', 8),
+                ('3.1. Ocupação e Utilidades (Aluguel, Energia, Água)', 'Despesa', 'despesas_operacionais', 9),
+                ('3.2. Pessoal (Pró-labore, Salários, Encargos)', 'Despesa', 'despesas_operacionais', 10),
+                ('3.3. Marketing e Vendas (Anúncios, Gráfica)', 'Despesa', 'despesas_vendas', 11),
+                ('3.4. Administrativo (Sistemas, Contador, Limpeza)', 'Despesa', 'despesas_operacionais', 12),
+                ('3.5. Manutenção e Conservação (Máquinas)', 'Despesa', 'despesas_operacionais', 13),
+                ('4.1. Investimentos: Máquinas e Obras', 'Despesa', 'investimentos', 14),
+                ('4.2. Investimentos: Informática e Móveis', 'Despesa', 'investimentos', 15),
+                ('5.1. Pagamento de Empréstimos e Juros', 'Despesa', 'nao_operacional', 16),
+                ('5.2. Tarifas Bancárias', 'Despesa', 'despesas_financeiras', 17),
+                ('5.3. Distribuição de Lucros', 'Despesa', 'distribuicao_lucros', 18),
+                ('5.4. Aportes de Capital / Investimento', 'Receita', 'aporte_capital', 19)
             `);
         }
-        const lista = await pool.query('SELECT * FROM fin_categorias ORDER BY tipo DESC, nome ASC');
+        const lista = await pool.query('SELECT * FROM fin_categorias ORDER BY ordem ASC, id ASC');
         res.json(lista.rows);
     } catch (e) {
         res.status(500).json({ erro: "Erro ao buscar categorias" });
+    }
+});
+
+// 5.1 Criar Nova Categoria Personalizada
+app.post('/api/financeiro/categorias', async (req, res) => {
+    try {
+        const { nome, tipo, dre_ref } = req.body;
+        if (!nome || !tipo || !dre_ref) return res.status(400).json({ erro: "Dados incompletos" });
+
+        const maxOrdem = await pool.query("SELECT COALESCE(MAX(ordem), 0) + 1 as proximo FROM fin_categorias");
+        const proximaOrdem = maxOrdem.rows[0].proximo;
+
+        await pool.query(
+            "INSERT INTO fin_categorias (nome, tipo, dre_ref, ordem) VALUES ($1, $2, $3, $4)",
+            [nome, tipo, dre_ref, proximaOrdem]
+        );
+        res.status(201).json({ sucesso: true });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao criar categoria" });
+    }
+});
+
+// 5.2 Salvar Reordenação de Categorias (Bulk Update Drag and Drop)
+app.put('/api/financeiro/categorias/ordem', async (req, res) => {
+    try {
+        for (let cat of req.body) {
+            await pool.query('UPDATE fin_categorias SET ordem = $1 WHERE id = $2', [cat.ordem, cat.id]);
+        }
+        res.json({ sucesso: true });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao reordenar" });
+    }
+});
+
+// 5.3 Deletar Categoria do Plano de Contas
+app.delete('/api/financeiro/categorias/:id', async (req, res) => {
+    try {
+        await pool.query('DELETE FROM fin_categorias WHERE id = $1', [req.params.id]);
+        res.json({ sucesso: true });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao deletar categoria. Verifique se existem lançamentos usando ela." });
     }
 });
 
