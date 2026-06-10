@@ -1150,40 +1150,36 @@ app.delete('/api/financeiro/lancamentos/:id', async (req, res) => {
     }
 });
 
-// 5. Buscar Categorias Ordenadas por Drag-and-Drop
+// 5. Buscar Categorias Ordenadas por Drag-and-Drop (ESTRUTURA PAI E FILHO YAMPA)
 app.get('/api/financeiro/categorias', async (req, res) => {
     try {
-        // Garante que a coluna ordem exista para suportar o arrasta-e-solta
         await pool.query("ALTER TABLE fin_categorias ADD COLUMN IF NOT EXISTS ordem INTEGER DEFAULT 0");
         
+        // 🧹 LIMPEZA INTELIGENTE: Remove os números velhos "1.1." "2.1" do banco de dados automaticamente
+        await pool.query(`UPDATE fin_categorias SET nome = REGEXP_REPLACE(nome, '^[0-9]+\\.[0-9]+[\\.\\s\\-]*', '') WHERE nome ~ '^[0-9]+\\.[0-9]+[\\.\\s\\-]*'`);
+
         const check = await pool.query('SELECT COUNT(*) FROM fin_categorias');
-        if (parseInt(check.rows[0].count) === 0) { // 🚀 AGORA SÓ INJETA SE ESTIVER TOTALMENTE VAZIO
+        if (parseInt(check.rows[0].count) === 0) { 
             await pool.query(`
                 INSERT INTO fin_categorias (nome, tipo, dre_ref, ordem) VALUES
-                ('1.1. Receita Loja Física (Balcão/Mesa)', 'Receita', 'receita_bruta', 1),
-                ('1.2. Receita Delivery (iFood, WhatsApp)', 'Receita', 'receita_bruta', 2),
-                ('1.3. Receita de Eventos / Encomendas', 'Receita', 'receita_bruta', 3),
-                ('2.1. Deduções: Impostos e Taxas (DAS, Cartão)', 'Despesa', 'deducoes', 4),
-                ('2.2. CMV: Insumos e Bases (Leite, Açaí)', 'Despesa', 'cmv', 5),
-                ('2.2. CMV: Embalagens', 'Despesa', 'cmv', 6),
-                ('2.2. CMV: Revenda (Bebidas, Terceiros)', 'Despesa', 'cmv', 7),
-                ('2.3. Despesas de Entrega (Motoboy/Logística)', 'Despesa', 'despesas_vendas', 8),
-                ('3.1. Ocupação e Utilidades (Aluguel, Energia, Água)', 'Despesa', 'despesas_operacionais', 9),
-                ('3.2. Pessoal (Pró-labore, Salários, Encargos)', 'Despesa', 'despesas_operacionais', 10),
-                ('3.3. Marketing e Vendas (Anúncios, Gráfica)', 'Despesa', 'despesas_vendas', 11),
-                ('3.4. Administrativo (Sistemas, Contador, Limpeza)', 'Despesa', 'despesas_operacionais', 12),
-                ('3.5. Manutenção e Conservação (Máquinas)', 'Despesa', 'despesas_operacionais', 13),
-                ('4.1. Investimentos: Máquinas e Obras', 'Despesa', 'investimentos', 14),
-                ('4.2. Investimentos: Informática e Móveis', 'Despesa', 'investimentos', 15),
-                ('5.1. Pagamento de Empréstimos e Juros', 'Despesa', 'nao_operacional', 16),
-                ('5.2. Tarifas Bancárias', 'Despesa', 'despesas_financeiras', 17),
-                ('5.3. Distribuição de Lucros', 'Despesa', 'distribuicao_lucros', 18),
-                ('5.4. Aportes de Capital / Investimento', 'Receita', 'aporte_capital', 19)
+                ('Loja Física (Balcão/Mesa)', 'Receita', 'receita_bruta', 1),
+                ('Delivery (iFood, WhatsApp)', 'Receita', 'receita_bruta', 2),
+                ('Impostos e DAS', 'Despesa', 'deducoes', 3),
+                ('Taxas de Cartão/Maquininha', 'Despesa', 'deducoes', 4),
+                ('Insumos e Bases (Leite, Açaí)', 'Despesa', 'cmv', 5),
+                ('Embalagens', 'Despesa', 'cmv', 6),
+                ('Bebidas e Revenda', 'Despesa', 'cmv', 7),
+                ('Aluguel e Condomínio', 'Despesa', 'despesas_operacionais', 8),
+                ('Energia Elétrica', 'Despesa', 'despesas_operacionais', 9),
+                ('Entregadores / Motoboy', 'Despesa', 'despesas_vendas', 10),
+                ('Marketing e Anúncios', 'Despesa', 'despesas_vendas', 11),
+                ('Tarifas Bancárias', 'Despesa', 'despesas_financeiras', 12)
             `);
         }
         const lista = await pool.query('SELECT * FROM fin_categorias ORDER BY ordem ASC, id ASC');
         res.json(lista.rows);
     } catch (e) {
+        console.error("ErroCategorias:", e);
         res.status(500).json({ erro: "Erro ao buscar categorias" });
     }
 });
