@@ -313,7 +313,8 @@ app.post('/api/vendas', async (req, res) => {
         res.status(201).json({ sucesso: true });
     } catch (erroGeral) { res.status(500).json({ erro: "Erro interno" }); }
 });
-        
+
+
 // ==========================================
 // 🛑 ATUALIZAR STATUS DA VENDA (COM DEVOLUÇÃO DE ESTOQUE E ESTORNO FINANCEIRO)
 // ==========================================
