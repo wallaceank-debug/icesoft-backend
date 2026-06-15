@@ -1106,15 +1106,14 @@ app.post('/api/whatsapp/disparo-manual', async (req, res) => {
 // 1. Resumo Inteligente (Cards do Dashboard Financeiro com Vendas Automáticas)
 app.get('/api/financeiro/resumo', async (req, res) => {
     try {
-        // Ignora a categoria 'movimentacao_interna' para não duplicar o saldo!
+        // 👇 CORREÇÃO: "Até o último dia do mês atual" (Engloba o mês todo + tudo que está atrasado!)
         const pagarQuery = await pool.query(`
             SELECT COALESCE(SUM(l.valor), 0) as total 
             FROM fin_lancamentos l
             LEFT JOIN fin_categorias c ON l.categoria_id = c.id
             WHERE l.tipo = 'Despesa' AND l.status = 'Pendente' 
             AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna')
-            AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE)
-            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            AND l.data_vencimento <= (date_trunc('month', CURRENT_DATE) + interval '1 month - 1 day')
         `);
 
         const receberQuery = await pool.query(`
@@ -1123,8 +1122,7 @@ app.get('/api/financeiro/resumo', async (req, res) => {
             LEFT JOIN fin_categorias c ON l.categoria_id = c.id
             WHERE l.tipo = 'Receita' AND l.status = 'Pendente'
             AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna')
-            AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE)
-            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            AND l.data_vencimento <= (date_trunc('month', CURRENT_DATE) + interval '1 month - 1 day')
         `);
 
         const entradasQuery = await pool.query(`SELECT COALESCE(SUM(l.valor), 0) as total FROM fin_lancamentos l LEFT JOIN fin_categorias c ON l.categoria_id = c.id WHERE l.tipo = 'Receita' AND l.status = 'Pago' AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna')`);
