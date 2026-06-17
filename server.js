@@ -524,6 +524,48 @@ app.get('/api/ranking', async (req, res) => {
     catch (e) { res.status(500).send("Erro"); }
 });
 
+// ==========================================
+// 🏆 NOVO: RANKING DOS TOP 3 ADICIONAIS MAIS VENDIDOS
+// ==========================================
+app.get('/api/ranking/adicionais', async (req, res) => {
+    try {
+        const vendasQuery = await pool.query(`SELECT itens FROM vendas WHERE status NOT ILIKE '%cancelad%'`);
+        const contagem = {};
+        
+        vendasQuery.rows.forEach(venda => {
+            let itens = venda.itens;
+            if (typeof itens === 'string') {
+                try { itens = JSON.parse(itens); } catch(e) { return; }
+            }
+            if (Array.isArray(itens)) {
+                itens.forEach(item => {
+                    const nomeProduto = item.nome || '';
+                    // Extrai apenas o que está entre parênteses (ex: "Açaí (Morango, Nutella)")
+                    if (nomeProduto.includes('(') && nomeProduto.includes(')')) {
+                        const complementosStr = nomeProduto.substring(nomeProduto.indexOf('(') + 1, nomeProduto.lastIndexOf(')'));
+                        const listaComplementos = complementosStr.split(',').map(a => a.trim()).filter(a => a !== '');
+                        
+                        listaComplementos.forEach(adc => {
+                            contagem[adc] = (contagem[adc] || 0) + (item.quantidade || 1);
+                        });
+                    }
+                });
+            }
+        });
+        
+        // Ordena do maior para o menor e pega os 3 primeiros
+        const top3 = Object.entries(contagem)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(entry => entry[0]);
+            
+        res.json(top3);
+    } catch (e) {
+        console.error("Erro no ranking de adicionais:", e);
+        res.status(500).json({ erro: "Erro ao buscar ranking" });
+    }
+});
+
 app.get('/api/caixa/status', async (req, res) => { try { res.json((await pool.query('SELECT * FROM controle_caixa ORDER BY id DESC LIMIT 1')).rows[0] || { status: 'Fechado' }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
 app.post('/api/caixa/abrir', async (req, res) => { try { res.json({ sucesso: true, caixa: (await pool.query("INSERT INTO controle_caixa (valor_inicial, status) VALUES ($1, 'Aberto') RETURNING *", [req.body.valor_inicial || 0])).rows[0] }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
 
