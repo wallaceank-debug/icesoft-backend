@@ -12,6 +12,25 @@ const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp'); 
 
+// --- INÍCIO DA BLINDAGEM DE SEGURANÇA ---
+const jwt = require('jsonwebtoken'); 
+const SEGREDO_JWT = process.env.JWT_SECRET || 'chave_mestra_icesoft_segura';
+
+function verificarToken(req, res, next) {
+    const token = req.headers['authorization'];
+    if (!token) return res.status(403).json({ erro: "Acesso negado. Onde está o seu crachá?" });
+    
+    try {
+        const tokenLimpo = token.split(' ')[1] || token;
+        const decodificado = jwt.verify(tokenLimpo, SEGREDO_JWT);
+        req.usuario = decodificado;
+        next(); 
+    } catch (e) {
+        res.status(401).json({ erro: "Crachá falso ou vencido!" });
+    }
+}
+// --- FIM DA BLINDAGEM DE SEGURANÇA ---
+
 const app = express();
 // 1. Cria o servidor HTTP do Node encapsulando o Express
 const server = http.createServer(app);
@@ -200,7 +219,7 @@ app.get('/api/relatorios/raiox-produtos', async (req, res) => {
     }
 });
 
-app.get('/api/vendas', async (req, res) => {
+app.get('/api/vendas', verificarToken, async (req, res) => {
     try {
         const { inicio, fim } = req.query;
         let querySql = 'SELECT * FROM vendas'; let params = [];
@@ -504,8 +523,14 @@ app.put('/api/vendas/:id/pagamento', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     try {
         const resultado = await pool.query('SELECT * FROM usuarios WHERE (username = $1 OR email = $1) AND senha = $2', [req.body.username, req.body.senha]);
-        if (resultado.rows.length > 0) res.json({ sucesso: true, token: "token-" + Date.now(), cargo: resultado.rows[0].cargo, usuario_id: resultado.rows[0].id });
-        else res.status(401).json({ sucesso: false, erro: "Incorreto" });
+        if (resultado.rows.length > 0) {
+            const usuario = resultado.rows[0];
+            // Gera o crachá oficial de 8 horas
+            const tokenReal = jwt.sign({ id: usuario.id, cargo: usuario.cargo }, SEGREDO_JWT, { expiresIn: '8h' });
+            res.json({ sucesso: true, token: tokenReal, cargo: usuario.cargo, usuario_id: usuario.id });
+        } else {
+            res.status(401).json({ sucesso: false, erro: "Incorreto" });
+        }
     } catch (e) { res.status(500).json({ erro: "Erro" }); }
 });
 
@@ -793,7 +818,7 @@ app.put('/api/loja/status', async (req, res) => { try { await pool.query("UPDATE
 app.get('/api/configuracoes', async (req, res) => { try { const configs = {}; (await pool.query("SELECT * FROM configuracoes")).rows.forEach(r => configs[r.chave] = r.valor); res.json(configs); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/configuracoes', async (req, res) => { try { for (let chave of Object.keys(req.body)) { await pool.query(`INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor`, [chave, String(req.body[chave])]); } res.json({ sucesso: true }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
 
-app.get('/api/crm/clientes', async (req, res) => {
+app.get('/api/crm/clientes', verificarToken, async (req, res) => {
     try {
         const queryInteligente = `
             WITH cliente_base AS (
@@ -1146,7 +1171,7 @@ app.post('/api/whatsapp/disparo-manual', async (req, res) => {
 // ==========================================
 
 // 1. Resumo Inteligente (Cards do Dashboard Financeiro com Vendas Automáticas)
-app.get('/api/financeiro/resumo', async (req, res) => {
+app.get('/api/financeiro/resumo', verificarToken, async (req, res) => {
     try {
         // 👇 CORREÇÃO: "Até o último dia do mês atual" (Engloba o mês todo + tudo que está atrasado!)
         const pagarQuery = await pool.query(`
@@ -1515,7 +1540,7 @@ app.put('/api/financeiro/bancos/:id', async (req, res) => {
 });
 
 // 9. Dados para os Gráficos do Dashboard Financeiro
-app.get('/api/financeiro/graficos', async (req, res) => {
+app.get('/api/financeiro/graficos', verificarToken, async (req, res) => {
     try {
         // 1. Receitas vs Despesas (Mês Atual) - IGNORANDO TRANSFERÊNCIAS (movimentacao_interna) E PEGANDO SÓ O PAGO
         const despesasQuery = await pool.query(`
@@ -1611,7 +1636,7 @@ app.get('/api/financeiro/graficos', async (req, res) => {
 });
 
 // 11. Relatório de Fluxo de Caixa (Panorama Realizado e Previsto - 12 Meses)
-app.get('/api/financeiro/fluxo-caixa', async (req, res) => {
+app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
     try {
         // Busca vendas REAIS (sem cancelamentos)
         const vendasQuery = await pool.query(`
