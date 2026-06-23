@@ -998,15 +998,54 @@ app.post('/api/pagamento/pix', async (req, res) => {
         const mpToken = (await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'")).rows[0]?.valor;
         if (!mpToken) return res.status(400).json({ erro: "Mercado Pago não configurado." });
 
+        const valorFinal = Number(req.body.valor);
+        if (valorFinal <= 0) return res.status(400).json({ erro: "Valor inválido para Pix." });
+
+        // 🛡️ Prevenção 1: Sanitização do Nome (Remove emojis e caracteres estranhos)
+        let nomeLimpo = req.body.cliente_nome ? req.body.cliente_nome.trim().replace(/[^a-zA-ZÀ-ÿ\s]/g, '') : "Cliente";
+        if (nomeLimpo.length < 2) nomeLimpo = "Cliente Icesoft";
+
+        // 🛡️ Prevenção 2: E-mail Dinâmico para fugir do Anti-Spam
+        const emailDinamico = `pedido.${Date.now()}@icesoft.com.br`;
+
+        // 🛡️ Prevenção 3: Chave de segurança à prova de colisões
+        const chaveSeguranca = "ICE-" + Date.now() + "-" + Math.floor(Math.random() * 10000);
+
         const mpResponse = await fetch('https://api.mercadopago.com/v1/payments', {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${mpToken}`, 'X-Idempotency-Key': "ICE-" + Date.now(), 'Content-Type': 'application/json' },
-            body: JSON.stringify({ transaction_amount: Number(req.body.valor), description: "Pedido Icesoft Delivery", payment_method_id: "pix", payer: { email: "delivery@icesoft.com.br", first_name: req.body.cliente_nome || "Cliente" } })
+            headers: { 
+                'Authorization': `Bearer ${mpToken}`, 
+                'X-Idempotency-Key': chaveSeguranca, 
+                'Content-Type': 'application/json' 
+            },
+            body: JSON.stringify({ 
+                transaction_amount: valorFinal, 
+                description: "Pedido Icesoft Delivery", 
+                payment_method_id: "pix", 
+                payer: { 
+                    email: emailDinamico, 
+                    first_name: nomeLimpo 
+                } 
+            })
         });
+        
         const data = await mpResponse.json();
-        if (data.error || !data.point_of_interaction) return res.status(500).json({ erro: "Falha ao gerar o Pix." });
-        res.json({ sucesso: true, transacao_id: data.id, qr_code_base64: data.point_of_interaction.transaction_data.qr_code_base64, qr_code_copia_cola: data.point_of_interaction.transaction_data.qr_code });
-    } catch (e) { res.status(500).json({ erro: "Erro" }); }
+        
+        if (data.error || !data.point_of_interaction) {
+            console.error("⚠️ Recusa do Mercado Pago:", data);
+            return res.status(500).json({ erro: "Falha ao gerar o Pix." });
+        }
+        
+        res.json({ 
+            sucesso: true, 
+            transacao_id: data.id, 
+            qr_code_base64: data.point_of_interaction.transaction_data.qr_code_base64, 
+            qr_code_copia_cola: data.point_of_interaction.transaction_data.qr_code 
+        });
+    } catch (e) { 
+        console.error("Erro API Pix:", e);
+        res.status(500).json({ erro: "Erro interno no servidor." }); 
+    }
 });
 
 app.post('/api/pagamento/webhook', async (req, res) => {
