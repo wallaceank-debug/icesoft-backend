@@ -173,12 +173,12 @@ pool.connect()
         await pool.query("ALTER TABLE categorias ADD COLUMN IF NOT EXISTS hora_fim VARCHAR(10) DEFAULT ''");
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categorias_adicionais JSONB DEFAULT '[]'");
         
-        // 🛠️ AUTO-CURA: Sincroniza os contadores de IDs para evitar erro de "chave duplicada"
+        // 🛠️ AUTO-CURA AMPLIADA: Sincroniza os contadores de IDs para todas as tabelas de alto fluxo
         try {
-            await pool.query(`SELECT setval(pg_get_serial_sequence('fin_lancamentos', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM fin_lancamentos;`);
-            await pool.query(`SELECT setval(pg_get_serial_sequence('vendas', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM vendas;`);
-            await pool.query(`SELECT setval(pg_get_serial_sequence('controle_caixa', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM controle_caixa;`);
-            await pool.query(`SELECT setval(pg_get_serial_sequence('movimentacoes_caixa', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM movimentacoes_caixa;`);
+            const tabelasCriticas = ['fin_lancamentos', 'vendas', 'controle_caixa', 'movimentacoes_caixa', 'funil_eventos'];
+            for (let tabela of tabelasCriticas) {
+                await pool.query(`SELECT setval(pg_get_serial_sequence('${tabela}', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM ${tabela};`).catch(()=>null);
+            }
         } catch (e) { console.log("Aviso: Sincronização de sequências pulada."); }
 
         console.log("📦 Estrutura do Banco 100% Blindada e Pronta!");
@@ -1725,9 +1725,11 @@ app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
     }
 });
 
+// ==========================================
 // 12. Executar Transferência entre Contas com Dedução de Taxas (Auditoria)
-// 12. Executar Transferência entre Contas com Dedução de Taxas (Auditoria)
+// ==========================================
 app.post('/api/financeiro/transferencias', async (req, res) => {
+    let client; // 🛡️ Criamos a variável do 'funcionário exclusivo'
     try {
         const { conta_origem_id, conta_destino_id, valor_bruto, taxa, descricao, data_transferencia } = req.body;
         
@@ -1735,49 +1737,52 @@ app.post('/api/financeiro/transferencias', async (req, res) => {
         const vTaxa = parseFloat(taxa) || 0;
         const vLiquido = vBruto - vTaxa;
         
-        // 👇 Agora sim, apenas UMA declaração inteligente da data:
+        // 🛡️ Tratamento de segurança: se vier vazio do frontend, vira null para não quebrar o banco
+        const contaOrigem = conta_origem_id ? parseInt(conta_origem_id) : null;
+        const contaDestino = conta_destino_id ? parseInt(conta_destino_id) : null;
+        
         const dataAtual = data_transferencia || new Date().toISOString().split('T')[0];
 
-        // 1. Procura ou cria a categoria de movimentação interna (para o DRE ignorar o saldo principal)
         let catResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'movimentacao_interna' LIMIT 1");
         if (catResult.rows.length === 0) {
             catResult = await pool.query("INSERT INTO fin_categorias (nome, tipo, dre_ref) VALUES ('Transferência / Fechamento', 'Receita', 'movimentacao_interna') RETURNING id");
         }
         const categoriaInternaId = catResult.rows[0].id;
 
-        // 2. Procura a categoria de taxas (Deduções) para computar a taxa no DRE oficialmente
         let catTaxaResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'deducoes' LIMIT 1");
         const categoriaTaxaId = catTaxaResult.rows[0]?.id || null;
 
-        // Inicia a transação de segurança no banco de dados
-        await pool.query('BEGIN');
+        // 🚀 A MÁGICA ACONTECE AQUI: Pegamos uma conexão exclusiva
+        client = await pool.connect();
+        await client.query('BEGIN');
 
-        // A) Lança a saída do valor bruto da conta de origem (Ignorado pelo DRE)
-        await pool.query(`
+        await client.query(`
             INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
             VALUES ($1, $2, $3, 'Pago', 'Despesa', $4, $5)
-        `, [`[Saída Transferência] ${descricao}`, vBruto, dataAtual, categoriaInternaId, conta_origem_id]);
+        `, [`[Saída Transferência] ${descricao}`, vBruto, dataAtual, categoriaInternaId, contaOrigem]);
 
-        // B) Lança a entrada do valor líquido na conta de destino (Ignorado pelo DRE)
-        await pool.query(`
+        await client.query(`
             INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
             VALUES ($1, $2, $3, 'Pago', 'Receita', $4, $5)
-        `, [`[Entrada Transferência] ${descricao}`, vLiquido, dataAtual, categoriaInternaId, conta_destino_id]);
+        `, [`[Entrada Transferência] ${descricao}`, vLiquido, dataAtual, categoriaInternaId, contaDestino]);
 
-        // C) Se houver taxa, lança como uma Despesa de taxa na conta de origem (Computado no DRE!)
         if (vTaxa > 0 && categoriaTaxaId) {
-            await pool.query(`
+            await client.query(`
                 INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
                 VALUES ($1, $2, $3, 'Pago', 'Despesa', $4, $5)
-            `, [`[Taxa Maquininha] ${descricao}`, vTaxa, dataAtual, categoriaTaxaId, conta_origem_id]);
+            `, [`[Taxa Maquininha] ${descricao}`, vTaxa, dataAtual, categoriaTaxaId, contaOrigem]);
         }
 
-        await pool.query('COMMIT');
+        await client.query('COMMIT');
         res.json({ sucesso: true });
     } catch (e) {
-        await pool.query('ROLLBACK');
+        // Se der erro, cancelamos apenas as ações desse funcionário
+        if (client) await client.query('ROLLBACK');
         console.error("Erro na transferência:", e);
         res.status(500).json({ erro: "Erro ao processar transferência" });
+    } finally {
+        // Sempre devolvemos o funcionário para o grupo (pool) ao terminar
+        if (client) client.release();
     }
 });
 
