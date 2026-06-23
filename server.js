@@ -172,6 +172,15 @@ pool.connect()
         await pool.query("ALTER TABLE categorias ADD COLUMN IF NOT EXISTS hora_inicio VARCHAR(10) DEFAULT ''");
         await pool.query("ALTER TABLE categorias ADD COLUMN IF NOT EXISTS hora_fim VARCHAR(10) DEFAULT ''");
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categorias_adicionais JSONB DEFAULT '[]'");
+        
+        // 🛠️ AUTO-CURA: Sincroniza os contadores de IDs para evitar erro de "chave duplicada"
+        try {
+            await pool.query(`SELECT setval(pg_get_serial_sequence('fin_lancamentos', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM fin_lancamentos;`);
+            await pool.query(`SELECT setval(pg_get_serial_sequence('vendas', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM vendas;`);
+            await pool.query(`SELECT setval(pg_get_serial_sequence('controle_caixa', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM controle_caixa;`);
+            await pool.query(`SELECT setval(pg_get_serial_sequence('movimentacoes_caixa', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM movimentacoes_caixa;`);
+        } catch (e) { console.log("Aviso: Sincronização de sequências pulada."); }
+
         console.log("📦 Estrutura do Banco 100% Blindada e Pronta!");
     })
     .catch(err => console.error('❌ Erro no banco:', err));
