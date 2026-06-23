@@ -238,6 +238,18 @@ app.get('/api/vendas', verificarToken, async (req, res) => {
     } catch (e) { res.status(500).json({ erro: "Erro ao buscar vendas" }); }
 });
 
+// ==========================================
+// ROTA PÚBLICA SEGURA PARA O CRM DO CARDÁPIO DIGITAL
+// ==========================================
+app.get('/api/vendas/cliente/:telefone', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM vendas WHERE cliente_telefone = $1 ORDER BY id DESC', [req.params.telefone]);
+        res.json(result.rows);
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao buscar histórico do cliente" });
+    }
+});
+
 app.post('/api/vendas', async (req, res) => { 
     try { 
         const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id } = req.body;
