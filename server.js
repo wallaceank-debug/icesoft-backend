@@ -164,6 +164,14 @@ pool.connect()
                 data_pagamento DATE, status VARCHAR(20) DEFAULT 'Pendente', tipo VARCHAR(20), 
                 conta_id INTEGER, categoria_id INTEGER, recorrente BOOLEAN DEFAULT false
             );
+
+            CREATE TABLE IF NOT EXISTS marketing_envios (
+                id SERIAL PRIMARY KEY, 
+                telefone VARCHAR(20), 
+                cliente_nome VARCHAR(100),
+                campanha TEXT, 
+                data_envio TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         `);
     })
     .then(async () => {
@@ -1927,6 +1935,55 @@ app.get('/api/financeiro/alertas', async (req, res) => {
     } catch (e) {
         console.error("Erro nos alertas:", e);
         res.status(500).json({ erro: "Erro ao gerar alertas" });
+    }
+});
+
+// ==========================================
+// 🎯 MÓDULO DE MARKETING & DISPAROS INTELIGENTES
+// ==========================================
+
+// 1. Salvar o registro de um disparo feito para não repetir depois
+app.post('/api/marketing/registro', async (req, res) => {
+    try {
+        const { telefone, nome, campanha } = req.body;
+        const telLimpo = String(telefone).replace(/\D/g, '');
+        await pool.query(
+            "INSERT INTO marketing_envios (telefone, cliente_nome, campanha) VALUES ($1, $2, $3)", 
+            [telLimpo, nome, campanha]
+        );
+        res.status(201).json({ sucesso: true });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao registrar disparo" });
+    }
+});
+
+// 2. Rastrear o Lucro (ROI) e o Histórico de Disparos
+app.get('/api/marketing/dashboard', async (req, res) => {
+    try {
+        // A) Pega todos os envios feitos e o tempo passado
+        const enviosQuery = await pool.query("SELECT * FROM marketing_envios ORDER BY data_envio DESC");
+        const envios = enviosQuery.rows;
+
+        // B) Cruzamento Inteligente: Calcula as vendas feitas em até 48h APÓS o cliente receber a mensagem
+        const roiQuery = await pool.query(`
+            SELECT SUM(v.valor_total) as lucro_gerado, COUNT(v.id) as pedidos_gerados
+            FROM vendas v
+            JOIN marketing_envios m ON regexp_replace(v.cliente_telefone, '\\D', '', 'g') = m.telefone
+            WHERE v.data_hora > m.data_envio 
+            AND v.data_hora <= (m.data_envio + INTERVAL '48 hours')
+            AND v.status NOT ILIKE '%cancelad%'
+        `);
+
+        res.json({
+            historico: envios,
+            kpis: {
+                total_enviado: envios.length,
+                pedidos_gerados: parseInt(roiQuery.rows[0].pedidos_gerados) || 0,
+                lucro_gerado: parseFloat(roiQuery.rows[0].lucro_gerado) || 0
+            }
+        });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao calcular ROI do marketing" });
     }
 });
 
