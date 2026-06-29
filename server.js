@@ -1754,12 +1754,12 @@ app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
             GROUP BY mes
         `);
 
-        // Busca despesas e receitas, e traz o status junto para o filtro inteligente
+        // 👇 MUDANÇA: Buscamos também o "nome" da categoria (c.nome) para os detalhes
         const lancamentosQuery = await pool.query(`
-            SELECT TO_CHAR(l.data_vencimento, 'YYYY-MM') as mes, c.dre_ref, c.tipo, l.status, COALESCE(SUM(l.valor), 0) as total
+            SELECT TO_CHAR(l.data_vencimento, 'YYYY-MM') as mes, c.dre_ref, c.nome, c.tipo, l.status, COALESCE(SUM(l.valor), 0) as total
             FROM fin_lancamentos l
             JOIN fin_categorias c ON l.categoria_id = c.id
-            GROUP BY mes, c.dre_ref, c.tipo, l.status
+            GROUP BY mes, c.dre_ref, c.nome, c.tipo, l.status
         `);
 
         // Gera o esqueleto de 12 meses: 5 meses passados + Mês Atual + 6 meses no futuro
@@ -1784,24 +1784,36 @@ app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
             let receitas_manuais = 0;
             let cmv = 0, desp_op = 0, desp_vendas = 0, impostos = 0, financeiras = 0, investimentos = 0;
 
+            // 🧠 NOVO: Memória de detalhes por mês
+            let detalhes = {
+                receitas_manuais: {}, cmv: {}, despesas_operacionais: {}, 
+                despesas_vendas: {}, deducoes: {}, financeiras_invest: {}
+            };
+
             lancamentosMes.forEach(l => {
                 // REGRA DE OURO: Se o mês já passou, só conta o que foi 'Pago'. Se é atual ou futuro, conta tudo (Previsto)
                 if (mes < mesAtualStr && l.status !== 'Pago') return;
 
-                // 🛑 MÁGICA: IGNORA TRANSFERÊNCIAS INTERNAS E FECHAMENTOS PARA NÃO DUPLICAR ENTRADA!
+                // IGNORA TRANSFERÊNCIAS INTERNAS E FECHAMENTOS
                 if (l.dre_ref === 'movimentacao_interna') return;
 
                 const valor = parseFloat(l.total);
-                if (l.tipo === 'Receita') receitas_manuais += valor;
+                if (l.tipo === 'Receita') {
+                    receitas_manuais += valor;
+                    detalhes.receitas_manuais[l.nome] = (detalhes.receitas_manuais[l.nome] || 0) + valor;
+                }
                 if (l.tipo === 'Despesa') {
-                    if (l.dre_ref === 'cmv') cmv += valor;
-                    else if (l.dre_ref === 'despesas_operacionais') desp_op += valor;
-                    else if (l.dre_ref === 'despesas_vendas') desp_vendas += valor;
-                    else if (l.dre_ref === 'deducoes') impostos += valor;
-                    else if (l.dre_ref === 'investimentos') investimentos += valor;
-                    else financeiras += valor; 
+                    if (l.dre_ref === 'cmv') { cmv += valor; detalhes.cmv[l.nome] = (detalhes.cmv[l.nome] || 0) + valor; }
+                    else if (l.dre_ref === 'despesas_operacionais') { desp_op += valor; detalhes.despesas_operacionais[l.nome] = (detalhes.despesas_operacionais[l.nome] || 0) + valor; }
+                    else if (l.dre_ref === 'despesas_vendas') { desp_vendas += valor; detalhes.despesas_vendas[l.nome] = (detalhes.despesas_vendas[l.nome] || 0) + valor; }
+                    else if (l.dre_ref === 'deducoes') { impostos += valor; detalhes.deducoes[l.nome] = (detalhes.deducoes[l.nome] || 0) + valor; }
+                    else if (l.dre_ref === 'investimentos') { investimentos += valor; detalhes.financeiras_invest[l.nome] = (detalhes.financeiras_invest[l.nome] || 0) + valor; }
+                    else { financeiras += valor; detalhes.financeiras_invest[l.nome] = (detalhes.financeiras_invest[l.nome] || 0) + valor; }
                 }
             });
+
+            // Converte o formato para o Frontend ler facilmente
+            const formatDetails = (obj) => Object.keys(obj).map(k => ({ nome: k, total: obj[k] }));
 
             const receita_total = vendasMes + receitas_manuais;
             const despesa_total = cmv + desp_op + desp_vendas + impostos + financeiras + investimentos;
@@ -1813,7 +1825,15 @@ app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
                 receita_total,
                 cmv, desp_op, desp_vendas, impostos, financeiras, investimentos,
                 despesa_total,
-                saldo_mes: receita_total - despesa_total
+                saldo_mes: receita_total - despesa_total,
+                detalhes: {
+                    receitas_manuais: formatDetails(detalhes.receitas_manuais),
+                    cmv: formatDetails(detalhes.cmv),
+                    despesas_operacionais: formatDetails(detalhes.despesas_operacionais),
+                    despesas_vendas: formatDetails(detalhes.despesas_vendas),
+                    deducoes: formatDetails(detalhes.deducoes),
+                    financeiras_invest: formatDetails(detalhes.financeiras_invest)
+                }
             };
         });
 
