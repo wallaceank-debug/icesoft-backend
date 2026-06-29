@@ -1345,21 +1345,25 @@ app.post('/api/financeiro/lancamentos', async (req, res) => {
     }
 });
 
-// 3. Buscar Lançamentos com Filtros Inteligentes (Data, Banco, Busca e CARDS)
+// 3. Buscar Lançamentos com Filtros Inteligentes (Data, Banco, Categoria, Busca e CARDS)
 app.get('/api/financeiro/lancamentos', async (req, res) => {
     try {
-        const { banco_id, data_inicio, data_fim, busca, filtro_card } = req.query;
+        const { banco_id, categoria_id, data_inicio, data_fim, busca, filtro_card } = req.query;
         
         let query = `SELECT * FROM fin_lancamentos WHERE 1=1`;
         let params = [];
         let paramCount = 1;
 
         if (banco_id) { query += ` AND conta_id = $${paramCount}`; params.push(banco_id); paramCount++; }
+        
+        // 👇 NOVO: A inteligência do filtro por Plano de Contas
+        if (categoria_id) { query += ` AND categoria_id = $${paramCount}`; params.push(categoria_id); paramCount++; }
+        
         if (data_inicio) { query += ` AND data_vencimento >= $${paramCount}`; params.push(data_inicio); paramCount++; }
         if (data_fim) { query += ` AND data_vencimento <= $${paramCount}`; params.push(data_fim); paramCount++; }
         if (busca) { query += ` AND descricao ILIKE $${paramCount}`; params.push(`%${busca}%`); paramCount++; }
 
-        // 👇 A MÁGICA: O banco de dados faz a filtragem pesada de status (Ignorando limites irrelevantes)
+        // Filtragem pesada de status 
         if (filtro_card === 'pagar') {
             query += ` AND tipo = 'Despesa' AND status = 'Pendente'`;
         } else if (filtro_card === 'receber') {
