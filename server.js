@@ -198,7 +198,11 @@ app.get('/api/relatorios/funil', async (req, res) => {
     try {
         const { inicio, fim } = req.query;
         let filtroSQL = ''; let params = [];
-        if (inicio && fim) { filtroSQL = " AND data_hora::date BETWEEN $1 AND $2"; params = [inicio, fim]; }
+        if (inicio && fim) { 
+            // 🛡️ VACINA ANTI-FUSO (FUNIL)
+            filtroSQL = " AND (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $1 AND $2"; 
+            params = [inicio, fim]; 
+        }
         const visitantes = await pool.query(`SELECT COUNT(DISTINCT sessao_id) FROM funil_eventos WHERE evento = 'Visitou o Cardápio'${filtroSQL}`, params);
         const visualizacoes = await pool.query(`SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Visualizou Produto'${filtroSQL}`, params);
         const carrinho = await pool.query(`SELECT COUNT(*) FROM funil_eventos WHERE evento = 'Adicionou ao Carrinho'${filtroSQL}`, params);
@@ -217,7 +221,8 @@ app.get('/api/relatorios/raiox-produtos', async (req, res) => {
         const { inicio, fim } = req.query;
         let filtroSQL = ''; let params = [];
         if (inicio && fim) { 
-            filtroSQL = " AND data_hora::date BETWEEN $1 AND $2"; 
+            // 🛡️ VACINA ANTI-FUSO (RAIO-X)
+            filtroSQL = " AND (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $1 AND $2"; 
             params = [inicio, fim]; 
         }
 
@@ -240,7 +245,11 @@ app.get('/api/vendas', verificarToken, async (req, res) => {
     try {
         const { inicio, fim } = req.query;
         let querySql = 'SELECT * FROM vendas'; let params = [];
-        if (inicio && fim) { querySql += ' WHERE data_hora::date BETWEEN $1 AND $2'; params = [inicio, fim]; }
+        if (inicio && fim) { 
+            // 🛡️ VACINA ANTI-FUSO: Converte UTC para Brasília antes de filtrar a data
+            querySql += " WHERE (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN $1 AND $2"; 
+            params = [inicio, fim]; 
+        }
         querySql += ' ORDER BY data_hora DESC';
         res.json((await pool.query(querySql, params)).rows);
     } catch (e) { res.status(500).json({ erro: "Erro ao buscar vendas" }); }
