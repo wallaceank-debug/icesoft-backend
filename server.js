@@ -323,7 +323,8 @@ app.post('/api/vendas', async (req, res) => {
                     let textoPronto = '';
                     let enviarMsg = false;
 
-                    if (origemFinal.toLowerCase().includes('balcão') && status === 'Concluída' && config.msg_balcao && config.msg_balcao.trim() !== '') {
+                    // 🛡️ A MÁGICA: Agora o robô trata as 'Mesas' com a mesma mensagem e fidelidade do 'Balcão'
+                    if ((origemFinal.toLowerCase().includes('balcão') || origemFinal.toLowerCase().includes('mesas')) && status === 'Concluída' && config.msg_balcao && config.msg_balcao.trim() !== '') {
                         textoPronto = config.msg_balcao.replace(/{nome}/g, primeiroNome).replace(/{pedido}/g, numeroDiario || 'Novo');
                         enviarMsg = true;
 
