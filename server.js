@@ -1304,10 +1304,16 @@ app.get('/api/financeiro/resumo', verificarToken, async (req, res) => {
 // 2. Criar um Novo Lançamento (Único, Parcelado ou Recorrente)
 app.post('/api/financeiro/lancamentos', async (req, res) => {
     try {
+        // 🛡️ Prepara o banco de dados para a nova inteligência de repetição
+        await pool.query("ALTER TABLE fin_lancamentos ADD COLUMN IF NOT EXISTS grupo_recorrencia VARCHAR(100)");
+
         const { descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id, recorrencia_tipo, qtd_meses } = req.body;
         
         const tipoRec = recorrencia_tipo || 'unico';
         const qtd = (tipoRec !== 'unico') ? (parseInt(qtd_meses) || 1) : 1;
+        
+        // 🧠 O DNA DA FAMÍLIA: Cria um código único se a conta for repetida
+        const grupoRec = (tipoRec !== 'unico') ? 'REC-' + Date.now() : null; 
         
         const promessas = [];
         const [ano, mes, dia] = data_vencimento.split('-');
@@ -1315,21 +1321,20 @@ app.post('/api/financeiro/lancamentos', async (req, res) => {
 
         for (let i = 0; i < qtd; i++) {
             let descFinal = descricao;
-            let statusFinal = (i === 0) ? (status || 'Pendente') : 'Pendente'; // Só a 1ª parcela pode nascer "Paga"
+            let statusFinal = (i === 0) ? (status || 'Pendente') : 'Pendente'; 
 
             if (tipoRec === 'parcelado') {
                 descFinal = `${descricao} (${i + 1}/${qtd})`;
             }
 
-            // Calcula o mês correto da parcela
             const novaData = new Date(dataBase.getFullYear(), dataBase.getMonth() + i, dataBase.getDate());
             const dataStr = `${novaData.getFullYear()}-${String(novaData.getMonth() + 1).padStart(2, '0')}-${String(novaData.getDate()).padStart(2, '0')}`;
 
             promessas.push(
                 pool.query(`
-                    INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id, recorrente)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *
-                `, [descFinal, valor, dataStr, statusFinal, tipo, categoria_id || null, conta_id || null, tipoRec !== 'unico'])
+                    INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id, recorrente, grupo_recorrencia)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *
+                `, [descFinal, valor, dataStr, statusFinal, tipo, categoria_id || null, conta_id || null, tipoRec !== 'unico', grupoRec])
             );
         }
         
@@ -1340,62 +1345,58 @@ app.post('/api/financeiro/lancamentos', async (req, res) => {
     }
 });
 
-// 3. Buscar Lançamentos com Filtros Inteligentes (Data, Banco, Busca)
+// 3. Buscar Lançamentos com Filtros Inteligentes (Mantido igual)
 app.get('/api/financeiro/lancamentos', async (req, res) => {
     try {
         const { banco_id, data_inicio, data_fim, busca } = req.query;
-        
         let query = `SELECT * FROM fin_lancamentos WHERE 1=1`;
         let params = [];
         let paramCount = 1;
 
-        // Se escolheu um banco específico
-        if (banco_id) {
-            query += ` AND conta_id = $${paramCount}`;
-            params.push(banco_id);
-            paramCount++;
-        }
-        
-        // Se escolheu data inicial
-        if (data_inicio) {
-            query += ` AND data_vencimento >= $${paramCount}`;
-            params.push(data_inicio);
-            paramCount++;
-        }
-        
-        // Se escolheu data final
-        if (data_fim) {
-            query += ` AND data_vencimento <= $${paramCount}`;
-            params.push(data_fim);
-            paramCount++;
-        }
-        
-        // Se digitou algo na barra de pesquisa
-        if (busca) {
-            query += ` AND descricao ILIKE $${paramCount}`;
-            params.push(`%${busca}%`);
-            paramCount++;
-        }
+        if (banco_id) { query += ` AND conta_id = $${paramCount}`; params.push(banco_id); paramCount++; }
+        if (data_inicio) { query += ` AND data_vencimento >= $${paramCount}`; params.push(data_inicio); paramCount++; }
+        if (data_fim) { query += ` AND data_vencimento <= $${paramCount}`; params.push(data_fim); paramCount++; }
+        if (busca) { query += ` AND descricao ILIKE $${paramCount}`; params.push(`%${busca}%`); paramCount++; }
 
-        query += ` ORDER BY data_vencimento DESC LIMIT 200`; // Aumentamos o limite para 200 resultados
+        query += ` ORDER BY data_vencimento DESC LIMIT 200`; 
         
         const lista = await pool.query(query, params);
         res.json(lista.rows);
-    } catch (e) {
-        console.error("Erro ao buscar lançamentos:", e);
-        res.status(500).json({ erro: "Erro ao buscar lançamentos" });
-    }
+    } catch (e) { res.status(500).json({ erro: "Erro ao buscar lançamentos" }); }
 });
 
-// 3.5 Atualizar/Editar um Lançamento
+// 3.5 Atualizar/Editar um Lançamento (AGORA COM EDIÇÃO EM MASSA)
 app.put('/api/financeiro/lancamentos/:id', async (req, res) => {
     try {
-        const { descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id } = req.body;
-        await pool.query(`
-            UPDATE fin_lancamentos 
-            SET descricao = $1, valor = $2, data_vencimento = $3, status = $4, tipo = $5, categoria_id = $6, conta_id = $7
-            WHERE id = $8
-        `, [descricao, valor, data_vencimento, status, tipo, categoria_id || null, conta_id || null, req.params.id]);
+        const { descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id, aplicar_futuros } = req.body;
+        
+        const itemAtual = (await pool.query('SELECT * FROM fin_lancamentos WHERE id = $1', [req.params.id])).rows[0];
+
+        // Se o usuário clicou em SIM para atualizar futuros, o sistema acha o DNA e aplica:
+        if (aplicar_futuros && itemAtual && itemAtual.grupo_recorrencia) {
+            
+            // 1. Atualiza o Valor e Categoria de TODAS as parcelas futuras dessa família
+            await pool.query(`
+                UPDATE fin_lancamentos 
+                SET valor = $1, categoria_id = $2, conta_id = $3
+                WHERE grupo_recorrencia = $4 AND data_vencimento >= $5
+            `, [valor, categoria_id || null, conta_id || null, itemAtual.grupo_recorrencia, itemAtual.data_vencimento]);
+            
+            // 2. Garante que o status/descrição seja atualizado apenas no item que ele clicou 
+            await pool.query(`
+                UPDATE fin_lancamentos 
+                SET descricao = $1, data_vencimento = $2, status = $3, tipo = $4
+                WHERE id = $5
+            `, [descricao, data_vencimento, status, tipo, req.params.id]);
+            
+        } else {
+            // Se ele clicou em NÃO, atualiza só essa linha normal
+            await pool.query(`
+                UPDATE fin_lancamentos 
+                SET descricao = $1, valor = $2, data_vencimento = $3, status = $4, tipo = $5, categoria_id = $6, conta_id = $7
+                WHERE id = $8
+            `, [descricao, valor, data_vencimento, status, tipo, categoria_id || null, conta_id || null, req.params.id]);
+        }
         
         res.json({ sucesso: true });
     } catch (e) {
@@ -1403,10 +1404,18 @@ app.put('/api/financeiro/lancamentos/:id', async (req, res) => {
     }
 });
 
-// 4. Deletar Lançamento
+// 4. Deletar Lançamento (AGORA COM DELEÇÃO EM MASSA)
 app.delete('/api/financeiro/lancamentos/:id', async (req, res) => {
     try {
-        await pool.query('DELETE FROM fin_lancamentos WHERE id = $1', [req.params.id]);
+        const { futuros } = req.query;
+        const itemAtual = (await pool.query('SELECT * FROM fin_lancamentos WHERE id = $1', [req.params.id])).rows[0];
+
+        if (futuros === 'true' && itemAtual && itemAtual.grupo_recorrencia) {
+            // Apaga todos da mesma família dali para frente!
+            await pool.query('DELETE FROM fin_lancamentos WHERE grupo_recorrencia = $1 AND data_vencimento >= $2', [itemAtual.grupo_recorrencia, itemAtual.data_vencimento]);
+        } else {
+            await pool.query('DELETE FROM fin_lancamentos WHERE id = $1', [req.params.id]);
+        }
         res.json({ sucesso: true });
     } catch (e) {
         res.status(500).json({ erro: "Erro ao deletar lançamento" });
