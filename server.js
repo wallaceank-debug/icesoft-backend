@@ -1345,10 +1345,11 @@ app.post('/api/financeiro/lancamentos', async (req, res) => {
     }
 });
 
-// 3. Buscar Lançamentos com Filtros Inteligentes (Mantido igual)
+// 3. Buscar Lançamentos com Filtros Inteligentes (Data, Banco, Busca e CARDS)
 app.get('/api/financeiro/lancamentos', async (req, res) => {
     try {
-        const { banco_id, data_inicio, data_fim, busca } = req.query;
+        const { banco_id, data_inicio, data_fim, busca, filtro_card } = req.query;
+        
         let query = `SELECT * FROM fin_lancamentos WHERE 1=1`;
         let params = [];
         let paramCount = 1;
@@ -1358,11 +1359,21 @@ app.get('/api/financeiro/lancamentos', async (req, res) => {
         if (data_fim) { query += ` AND data_vencimento <= $${paramCount}`; params.push(data_fim); paramCount++; }
         if (busca) { query += ` AND descricao ILIKE $${paramCount}`; params.push(`%${busca}%`); paramCount++; }
 
-        query += ` ORDER BY data_vencimento DESC LIMIT 200`; 
+        // 👇 A MÁGICA: O banco de dados faz a filtragem pesada de status (Ignorando limites irrelevantes)
+        if (filtro_card === 'pagar') {
+            query += ` AND tipo = 'Despesa' AND status = 'Pendente'`;
+        } else if (filtro_card === 'receber') {
+            query += ` AND tipo = 'Receita' AND status = 'Pendente'`;
+        }
+
+        query += ` ORDER BY data_vencimento DESC LIMIT 200`;
         
         const lista = await pool.query(query, params);
         res.json(lista.rows);
-    } catch (e) { res.status(500).json({ erro: "Erro ao buscar lançamentos" }); }
+    } catch (e) {
+        console.error("Erro ao buscar lançamentos:", e);
+        res.status(500).json({ erro: "Erro ao buscar lançamentos" });
+    }
 });
 
 // 3.5 Atualizar/Editar um Lançamento (AGORA COM SUPORTE A CONTAS ANTIGAS ÓRFÃS)
