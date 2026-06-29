@@ -1499,7 +1499,6 @@ app.delete('/api/financeiro/categorias/:id', async (req, res) => {
 // 6. Relatório DRE Automatizado (Cruzando lançamentos manuais + vendas do PDV)
 app.get('/api/financeiro/dre', async (req, res) => {
     try {
-        // A) Busca despesas e receitas manuais do mês atual
         const query = `
             SELECT c.dre_ref, COALESCE(SUM(l.valor), 0) as total 
             FROM fin_lancamentos l
@@ -1510,7 +1509,6 @@ app.get('/api/financeiro/dre', async (req, res) => {
         `;
         const resultado = await pool.query(query);
         
-        // B) 🚀 AUTOMACÃO: Puxa o faturamento bruto real das vendas da sorveteria deste mês
         const vendasMesQuery = await pool.query(`
             SELECT COALESCE(SUM(valor_total), 0) as total 
             FROM vendas 
@@ -1525,18 +1523,38 @@ app.get('/api/financeiro/dre', async (req, res) => {
             despesas_vendas: 0, despesas_operacionais: 0, 
             investimentos: 0, despesas_financeiras: 0, 
             distribuicao_lucros: 0, outras_receitas: 0, nao_operacional: 0,
-            aporte_capital: 0
+            aporte_capital: 0,
+            detalhes: {} // 🧠 NOVO: Memória de Subcontas para a Visão Completa
         };
 
         resultado.rows.forEach(row => {
             if (dre[row.dre_ref] !== undefined) dre[row.dre_ref] = parseFloat(row.total);
         });
 
-        // ⚡ Injeta automaticamente o faturamento do mês na linha de Receita Bruta do DRE
+        // 👇 NOVO: Busca detalhada para o botão de "Visão Completa"
+        const queryDetalhes = `
+            SELECT c.dre_ref, c.nome, COALESCE(SUM(l.valor), 0) as total 
+            FROM fin_lancamentos l
+            JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            GROUP BY c.dre_ref, c.nome
+        `;
+        const resDetalhes = await pool.query(queryDetalhes);
+        resDetalhes.rows.forEach(r => {
+            if (!dre.detalhes[r.dre_ref]) dre.detalhes[r.dre_ref] = [];
+            dre.detalhes[r.dre_ref].push({ nome: r.nome, total: parseFloat(r.total) });
+        });
+
+        if (!dre.detalhes['receita_bruta']) dre.detalhes['receita_bruta'] = [];
+        if (faturamentoAutomaticoMes > 0) {
+            dre.detalhes['receita_bruta'].push({ nome: 'Faturamento de Vendas (PDV/Delivery)', total: faturamentoAutomaticoMes });
+        }
+
+        // ⚡ Cálculos em Cascata
         dre.receita_bruta = dre.receita_bruta + faturamentoAutomaticoMes;
         dre.outras_receitas = dre.outras_receitas + dre.aporte_capital;
 
-        // Cálculos Contábeis em Cascata
         dre.receita_liquida = dre.receita_bruta - dre.deducoes;
         dre.lucro_bruto = dre.receita_liquida - dre.cmv;
         
