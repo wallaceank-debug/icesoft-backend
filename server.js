@@ -1539,6 +1539,20 @@ app.delete('/api/financeiro/categorias/:id', async (req, res) => {
     }
 });
 
+// 5.4 Atualizar/Editar Nome da Categoria do Plano de Contas
+app.put('/api/financeiro/categorias/:id', async (req, res) => {
+    try {
+        const { nome } = req.body;
+        if (!nome) return res.status(400).json({ erro: "O nome é obrigatório" });
+
+        await pool.query('UPDATE fin_categorias SET nome = $1 WHERE id = $2', [nome, req.params.id]);
+        res.json({ sucesso: true });
+    } catch (e) {
+        console.error("Erro ao editar categoria:", e);
+        res.status(500).json({ erro: "Erro ao editar categoria." });
+    }
+});
+
 // 6. Relatório DRE Automatizado (Cruzando lançamentos manuais + vendas do PDV)
 app.get('/api/financeiro/dre', async (req, res) => {
     try {
