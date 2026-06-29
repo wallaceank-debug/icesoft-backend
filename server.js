@@ -1073,13 +1073,16 @@ app.post('/api/pagamento/webhook', async (req, res) => {
             const mpToken = (await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'")).rows[0]?.valor;
             const pgtoInfo = await (await fetch(`https://api.mercadopago.com/v1/payments/${pagamentoId}`, { headers: { 'Authorization': `Bearer ${mpToken}` } })).json();
             if (pgtoInfo.status === 'approved') {
+                
+                // 🛡️ VACINA ANTI-RECUO: Só atualiza se o pedido não estiver nas colunas avançadas
                 const resultado = await pool.query(
-                    "UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1 RETURNING numero_diario, cliente_nome", 
+                    "UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1 AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Entregue', 'Concluída') AND status NOT ILIKE '%cancelad%' RETURNING numero_diario, cliente_nome", 
                     [pagamentoId.toString()]
                 );
                 
-                console.log(`✅ Pagamento Pix ${pagamentoId} APROVADO!`);
+                console.log(`✅ Pagamento Pix ${pagamentoId} APROVADO via Webhook!`);
 
+                // Só toca a campainha no Kanban se a vacina permitiu a atualização
                 if (resultado.rows.length > 0) {
                     const pedido = resultado.rows[0];
                     io.emit('novo_pedido_kanban', { 
@@ -1098,7 +1101,12 @@ app.get('/api/pagamento/pix/:id/status', async (req, res) => {
         const mpToken = (await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'")).rows[0]?.valor;
         const pgtoInfo = await (await fetch(`https://api.mercadopago.com/v1/payments/${req.params.id}`, { headers: { 'Authorization': `Bearer ${mpToken}` } })).json();
         if (pgtoInfo.status === 'approved') {
-            await pool.query("UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1", [req.params.id.toString()]);
+            
+            // 🛡️ VACINA ANTI-RECUO também na checagem da tela do cliente
+            await pool.query(
+                "UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1 AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Entregue', 'Concluída') AND status NOT ILIKE '%cancelad%'", 
+                [req.params.id.toString()]
+            );
             res.json({ pago: true });
         } else res.json({ pago: false });
     } catch (e) { res.status(500).json({ erro: "Erro" }); }
