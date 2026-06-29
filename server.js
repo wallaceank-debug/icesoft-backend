@@ -1365,24 +1365,34 @@ app.get('/api/financeiro/lancamentos', async (req, res) => {
     } catch (e) { res.status(500).json({ erro: "Erro ao buscar lançamentos" }); }
 });
 
-// 3.5 Atualizar/Editar um Lançamento (AGORA COM EDIÇÃO EM MASSA)
+// 3.5 Atualizar/Editar um Lançamento (AGORA COM SUPORTE A CONTAS ANTIGAS ÓRFÃS)
 app.put('/api/financeiro/lancamentos/:id', async (req, res) => {
     try {
         const { descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id, aplicar_futuros } = req.body;
         
         const itemAtual = (await pool.query('SELECT * FROM fin_lancamentos WHERE id = $1', [req.params.id])).rows[0];
 
-        // Se o usuário clicou em SIM para atualizar futuros, o sistema acha o DNA e aplica:
-        if (aplicar_futuros && itemAtual && itemAtual.grupo_recorrencia) {
+        // Se o usuário clicou em SIM para atualizar futuros:
+        if (aplicar_futuros && itemAtual && itemAtual.recorrente) {
             
-            // 1. Atualiza o Valor e Categoria de TODAS as parcelas futuras dessa família
-            await pool.query(`
-                UPDATE fin_lancamentos 
-                SET valor = $1, categoria_id = $2, conta_id = $3
-                WHERE grupo_recorrencia = $4 AND data_vencimento >= $5
-            `, [valor, categoria_id || null, conta_id || null, itemAtual.grupo_recorrencia, itemAtual.data_vencimento]);
+            if (itemAtual.grupo_recorrencia) {
+                // 1A. CONTAS NOVAS: Acha pelo DNA exato
+                await pool.query(`
+                    UPDATE fin_lancamentos 
+                    SET valor = $1, categoria_id = $2, conta_id = $3
+                    WHERE grupo_recorrencia = $4 AND data_vencimento >= $5
+                `, [valor, categoria_id || null, conta_id || null, itemAtual.grupo_recorrencia, itemAtual.data_vencimento]);
+            } else {
+                // 1B. CONTAS ANTIGAS (Plano B): Acha contas órfãs ignorando numerações do tipo "(1/12)"
+                const descBase = itemAtual.descricao.replace(/\s\(\d+\/\d+\)$/, ''); 
+                await pool.query(`
+                    UPDATE fin_lancamentos 
+                    SET valor = $1, categoria_id = $2, conta_id = $3
+                    WHERE descricao LIKE $4 AND valor = $5 AND data_vencimento >= $6 AND recorrente = true
+                `, [valor, categoria_id || null, conta_id || null, descBase + '%', itemAtual.valor, itemAtual.data_vencimento]);
+            }
             
-            // 2. Garante que o status/descrição seja atualizado apenas no item que ele clicou 
+            // 2. Garante que o status/descrição seja atualizado apenas no item clicado
             await pool.query(`
                 UPDATE fin_lancamentos 
                 SET descricao = $1, data_vencimento = $2, status = $3, tipo = $4
@@ -1390,7 +1400,7 @@ app.put('/api/financeiro/lancamentos/:id', async (req, res) => {
             `, [descricao, data_vencimento, status, tipo, req.params.id]);
             
         } else {
-            // Se ele clicou em NÃO, atualiza só essa linha normal
+            // Edição Única (clicou em NÃO)
             await pool.query(`
                 UPDATE fin_lancamentos 
                 SET descricao = $1, valor = $2, data_vencimento = $3, status = $4, tipo = $5, categoria_id = $6, conta_id = $7
@@ -1404,16 +1414,25 @@ app.put('/api/financeiro/lancamentos/:id', async (req, res) => {
     }
 });
 
-// 4. Deletar Lançamento (AGORA COM DELEÇÃO EM MASSA)
+// 4. Deletar Lançamento (AGORA COM SUPORTE A CONTAS ANTIGAS ÓRFÃS)
 app.delete('/api/financeiro/lancamentos/:id', async (req, res) => {
     try {
         const { futuros } = req.query;
         const itemAtual = (await pool.query('SELECT * FROM fin_lancamentos WHERE id = $1', [req.params.id])).rows[0];
 
-        if (futuros === 'true' && itemAtual && itemAtual.grupo_recorrencia) {
-            // Apaga todos da mesma família dali para frente!
-            await pool.query('DELETE FROM fin_lancamentos WHERE grupo_recorrencia = $1 AND data_vencimento >= $2', [itemAtual.grupo_recorrencia, itemAtual.data_vencimento]);
+        if (futuros === 'true' && itemAtual && itemAtual.recorrente) {
+            
+            if (itemAtual.grupo_recorrencia) {
+                // 1A. CONTAS NOVAS: Apaga a família pelo DNA
+                await pool.query('DELETE FROM fin_lancamentos WHERE grupo_recorrencia = $1 AND data_vencimento >= $2', [itemAtual.grupo_recorrencia, itemAtual.data_vencimento]);
+            } else {
+                // 1B. CONTAS ANTIGAS (Plano B): Caça as órfãs similares para apagar juntas
+                const descBase = itemAtual.descricao.replace(/\s\(\d+\/\d+\)$/, '');
+                await pool.query('DELETE FROM fin_lancamentos WHERE descricao LIKE $1 AND valor = $2 AND data_vencimento >= $3 AND recorrente = true', [descBase + '%', itemAtual.valor, itemAtual.data_vencimento]);
+            }
+            
         } else {
+            // Apaga uma linha única
             await pool.query('DELETE FROM fin_lancamentos WHERE id = $1', [req.params.id]);
         }
         res.json({ sucesso: true });
