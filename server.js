@@ -184,6 +184,8 @@ pool.connect()
         // 📦 NOVAS COLUNAS DO ESTOQUE INTELIGENTE
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS controlar_estoque BOOLEAN DEFAULT false");
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS mostrar_estoque BOOLEAN DEFAULT false");
+        // 👇 NOVO: Cria a coluna de inativação no banco de dados
+        await pool.query("ALTER TABLE fin_categorias ADD COLUMN IF NOT EXISTS ativa BOOLEAN DEFAULT true");
 
         // 🛠️ AUTO-CURA AMPLIADA: Sincroniza os contadores de IDs para todas as tabelas de alto fluxo
         try {
@@ -1554,6 +1556,17 @@ app.put('/api/financeiro/categorias/:id', async (req, res) => {
     } catch (e) {
         console.error("Erro ao editar categoria:", e);
         res.status(500).json({ erro: "Erro ao editar categoria." });
+    }
+});
+
+// 5.5 Ativar/Inativar Categoria do Plano de Contas
+app.put('/api/financeiro/categorias/:id/status', async (req, res) => {
+    try {
+        await pool.query('UPDATE fin_categorias SET ativa = $1 WHERE id = $2', [req.body.ativa, req.params.id]);
+        res.json({ sucesso: true });
+    } catch (e) {
+        console.error("Erro ao alterar status da categoria:", e);
+        res.status(500).json({ erro: "Erro ao inativar categoria." });
     }
 });
 
