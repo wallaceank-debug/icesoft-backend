@@ -187,7 +187,7 @@ pool.connect()
 
         // 🛠️ AUTO-CURA AMPLIADA: Sincroniza os contadores de IDs para todas as tabelas de alto fluxo
         try {
-            const tabelasCriticas = ['fin_lancamentos', 'vendas', 'controle_caixa', 'movimentacoes_caixa', 'funil_eventos'];
+            const tabelasCriticas = ['fin_lancamentos', 'vendas', 'controle_caixa', 'movimentacoes_caixa', 'funil_eventos', 'fin_categorias', 'fin_contas_bancarias'];
             for (let tabela of tabelasCriticas) {
                 await pool.query(`SELECT setval(pg_get_serial_sequence('${tabela}', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM ${tabela};`).catch(()=>null);
             }
