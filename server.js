@@ -1942,7 +1942,14 @@ app.post('/api/financeiro/transferencias', async (req, res) => {
         }
         const categoriaInternaId = catResult.rows[0].id;
 
-        let catTaxaResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'deducoes' LIMIT 1");
+        // 👇 NOVO: O Auditor agora procura especificamente pela subconta de Taxas/Maquininha
+        let catTaxaResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'deducoes' AND (nome ILIKE '%Maquininha%' OR nome ILIKE '%Cartão%' OR nome ILIKE '%Cartao%') LIMIT 1");
+        
+        // Plano B: Se a conta não for encontrada (nome alterado), ele pega a primeira disponível para não quebrar a transação
+        if (catTaxaResult.rows.length === 0) {
+            catTaxaResult = await pool.query("SELECT id FROM fin_categorias WHERE dre_ref = 'deducoes' LIMIT 1");
+        }
+        
         const categoriaTaxaId = catTaxaResult.rows[0]?.id || null;
 
         // 🚀 A MÁGICA ACONTECE AQUI: Pegamos uma conexão exclusiva
