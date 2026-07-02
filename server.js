@@ -1496,7 +1496,8 @@ app.post('/api/financeiro/categorias', async (req, res) => {
         const { nome, tipo, dre_ref } = req.body;
         if (!nome || !tipo || !dre_ref) return res.status(400).json({ erro: "Dados incompletos" });
 
-        // 🛡️ VACINA ANTI-ERRO 500: Garante que a coluna 'ordem' exista no banco antes de inserir!
+        // 🛡️ VACINAS ANTI-ERRO 500: Remove o limite de 100 caracteres do nome e garante a coluna de ordem!
+        await pool.query("ALTER TABLE fin_categorias ALTER COLUMN nome TYPE TEXT");
         await pool.query("ALTER TABLE fin_categorias ADD COLUMN IF NOT EXISTS ordem INTEGER DEFAULT 0");
 
         const maxOrdem = await pool.query("SELECT COALESCE(MAX(ordem), 0) + 1 as proximo FROM fin_categorias");
@@ -1508,7 +1509,7 @@ app.post('/api/financeiro/categorias', async (req, res) => {
         );
         res.status(201).json({ sucesso: true });
     } catch (e) {
-        console.error("Erro interno ao criar categoria:", e); // Agora o log vai avisar o erro real
+        console.error("Erro interno ao criar categoria:", e); 
         res.status(500).json({ erro: "Erro ao criar categoria" });
     }
 });
@@ -1544,6 +1545,9 @@ app.put('/api/financeiro/categorias/:id', async (req, res) => {
     try {
         const { nome } = req.body;
         if (!nome) return res.status(400).json({ erro: "O nome é obrigatório" });
+
+        // 🛡️ VACINA ANTI-ERRO 500: Garante que edições (Lápis) também aceitem textos infinitos
+        await pool.query("ALTER TABLE fin_categorias ALTER COLUMN nome TYPE TEXT");
 
         await pool.query('UPDATE fin_categorias SET nome = $1 WHERE id = $2', [nome, req.params.id]);
         res.json({ sucesso: true });
