@@ -1573,12 +1573,17 @@ app.put('/api/financeiro/categorias/:id/status', async (req, res) => {
 // 6. Relatório DRE Automatizado (Cruzando lançamentos manuais + vendas do PDV)
 app.get('/api/financeiro/dre', async (req, res) => {
     try {
+        const { visao } = req.query; // 👇 CAPTURA A CHAVE DO FRONTEND (efetuado ou previsto)
+        let filtroStatus = visao === 'efetuado' ? " AND l.status = 'Pago'" : "";
+
+        // 👇 CORREÇÃO FUSO HORÁRIO E FILTRO DE STATUS
         const query = `
             SELECT c.dre_ref, COALESCE(SUM(l.valor), 0) as total 
             FROM fin_lancamentos l
             JOIN fin_categorias c ON l.categoria_id = c.id
-            WHERE EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
-            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            WHERE EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date) 
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
+            ${filtroStatus}
             GROUP BY c.dre_ref
         `;
         const resultado = await pool.query(query);
@@ -1587,8 +1592,8 @@ app.get('/api/financeiro/dre', async (req, res) => {
             SELECT COALESCE(SUM(valor_total), 0) as total 
             FROM vendas 
             WHERE status NOT ILIKE '%cancelad%'
-            AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE)
-            AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)
+            AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
+            AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
         `);
         const faturamentoAutomaticoMes = parseFloat(vendasMesQuery.rows[0].total);
 
@@ -1598,20 +1603,21 @@ app.get('/api/financeiro/dre', async (req, res) => {
             investimentos: 0, despesas_financeiras: 0, 
             distribuicao_lucros: 0, outras_receitas: 0, nao_operacional: 0,
             aporte_capital: 0,
-            detalhes: {} // 🧠 NOVO: Memória de Subcontas para a Visão Completa
+            detalhes: {}
         };
 
         resultado.rows.forEach(row => {
             if (dre[row.dre_ref] !== undefined) dre[row.dre_ref] = parseFloat(row.total);
         });
 
-        // 👇 NOVO: Busca detalhada para o botão de "Visão Completa"
+        // 👇 APLICA O FILTRO TAMBÉM NA VISÃO DETALHADA
         const queryDetalhes = `
             SELECT c.dre_ref, c.nome, COALESCE(SUM(l.valor), 0) as total 
             FROM fin_lancamentos l
             JOIN fin_categorias c ON l.categoria_id = c.id
-            WHERE EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
-            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            WHERE EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date) 
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
+            ${filtroStatus}
             GROUP BY c.dre_ref, c.nome
         `;
         const resDetalhes = await pool.query(queryDetalhes);
@@ -1625,7 +1631,6 @@ app.get('/api/financeiro/dre', async (req, res) => {
             dre.detalhes['receita_bruta'].push({ nome: 'Faturamento de Vendas (PDV/Delivery)', total: faturamentoAutomaticoMes });
         }
 
-        // ⚡ Cálculos em Cascata
         dre.receita_bruta = dre.receita_bruta + faturamentoAutomaticoMes;
         dre.outras_receitas = dre.outras_receitas + dre.aporte_capital;
 
