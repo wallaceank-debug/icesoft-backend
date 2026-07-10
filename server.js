@@ -337,7 +337,11 @@ app.post('/api/vendas', async (req, res) => {
                         let resumo = `\n\n*🛒 Resumo da Compra:*\n`;
                         try {
                             const itensParsed = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
-                            itensParsed.forEach(item => { resumo += `▪️ ${item.quantidade || 1}x ${item.nome.replace('Delivery: ', '')} - R$ ${Number(item.preco).toFixed(2).replace('.', ',')}\n`; });
+                            itensParsed.forEach(item => { 
+                                const qtd = item.quantidade || 1;
+                                const precoLinha = Number(item.preco) * qtd; // Mostra o valor total daquela linha
+                                resumo += `▪️ ${qtd}x ${item.nome.replace('Delivery: ', '')} - R$ ${precoLinha.toFixed(2).replace('.', ',')}\n`; 
+                            });
                         } catch(e) {}
                         resumo += `\n*💰 Total:* R$ ${Number(valorFinal).toFixed(2).replace('.', ',')}`;
 
@@ -469,7 +473,11 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                         let resumo = `\n\n*🛒 Resumo do seu pedido:*\n`;
                         try {
                             const itens = typeof venda.itens === 'string' ? JSON.parse(venda.itens) : venda.itens;
-                            itens.forEach(item => { resumo += `▪️ 1x ${item.nome.replace('Delivery: ', '')} - R$ ${Number(item.preco).toFixed(2).replace('.', ',')}\n`; });
+                            itens.forEach(item => { 
+                                const qtd = item.quantidade || 1;
+                                const precoLinha = Number(item.preco) * qtd; // Multiplica pela quantidade para não confundir o cliente
+                                resumo += `▪️ ${qtd}x ${item.nome.replace('Delivery: ', '')} - R$ ${precoLinha.toFixed(2).replace('.', ',')}\n`; 
+                            });
                         } catch(e) {}
                         resumo += `\n*💰 Total:* R$ ${Number(venda.valor_total).toFixed(2).replace('.', ',')}`;
                         resumo += `\n*💳 Pagamento:* ${venda.forma_pagamento}`;
