@@ -1830,89 +1830,114 @@ app.get('/api/financeiro/graficos', verificarToken, async (req, res) => {
     }
 });
 
-// 11. Relatório de Fluxo de Caixa (Panorama Realizado e Previsto - 12 Meses)
+// ==========================================
+// 11. Relatório de Fluxo de Caixa (Regime de Caixa com Carry Over)
+// ==========================================
 app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
     try {
-        // Busca vendas REAIS (sem cancelamentos)
-        const vendasQuery = await pool.query(`
-            SELECT TO_CHAR(data_hora, 'YYYY-MM') as mes, COALESCE(SUM(valor_total), 0) as total
-            FROM vendas 
-            WHERE status NOT ILIKE '%cancelad%'
-            GROUP BY mes
-        `);
-
-        // 👇 MUDANÇA: Buscamos também o "nome" da categoria (c.nome) para os detalhes
-        const lancamentosQuery = await pool.query(`
-            SELECT TO_CHAR(l.data_vencimento, 'YYYY-MM') as mes, c.dre_ref, c.nome, c.tipo, l.status, COALESCE(SUM(l.valor), 0) as total
-            FROM fin_lancamentos l
-            JOIN fin_categorias c ON l.categoria_id = c.id
-            GROUP BY mes, c.dre_ref, c.nome, c.tipo, l.status
-        `);
-
-        // Gera o esqueleto de 12 meses: 5 meses passados + Mês Atual + 6 meses no futuro
+        // 1. Gera o esqueleto de 12 meses: 5 meses passados + Mês Atual + 6 meses no futuro
         const meses = [];
+        let dataInicioJanela = null;
+        
         for (let i = -5; i <= 6; i++) {
             const d = new Date();
             d.setMonth(d.getMonth() + i);
             const ano = d.getFullYear();
             const mes = String(d.getMonth() + 1).padStart(2, '0');
             meses.push(`${ano}-${mes}`);
+            if (i === -5) dataInicioJanela = `${ano}-${mes}-01`;
         }
 
-        // Descobre qual é o mês atual para separar o Realizado do Previsto
+        // 2. 🧠 A MÁGICA DO CARRY OVER: Calcula TUDO que a empresa faturou e gastou ANTES da nossa tabela começar
+        const bancosQuery = await pool.query("SELECT COALESCE(SUM(saldo_inicial), 0) as total FROM fin_contas_bancarias");
+        const saldoBancosOrigem = parseFloat(bancosQuery.rows[0].total);
+
+        const vendasPassadoQuery = await pool.query(`
+            SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas 
+            WHERE status NOT ILIKE '%cancelad%' AND data_hora < $1
+        `, [dataInicioJanela]);
+        
+        const lancamentosPassadoQuery = await pool.query(`
+            SELECT tipo, COALESCE(SUM(valor), 0) as total FROM fin_lancamentos 
+            WHERE data_vencimento < $1 AND status = 'Pago' 
+            AND categoria_id IN (SELECT id FROM fin_categorias WHERE dre_ref != 'movimentacao_interna')
+            GROUP BY tipo
+        `, [dataInicioJanela]);
+
+        let receitasPassado = parseFloat(vendasPassadoQuery.rows[0].total);
+        let despesasPassado = 0;
+        lancamentosPassadoQuery.rows.forEach(r => {
+            if (r.tipo === 'Receita') receitasPassado += parseFloat(r.total);
+            if (r.tipo === 'Despesa') despesasPassado += parseFloat(r.total);
+        });
+
+        // Montante exato da empresa no primeiro dia do nosso Dashboard
+        let saldoAcumulado = saldoBancosOrigem + receitasPassado - despesasPassado; 
+
+        // 3. Busca os dados apenas da janela de 12 meses
+        const vendasQuery = await pool.query(`
+            SELECT TO_CHAR(data_hora, 'YYYY-MM') as mes, COALESCE(SUM(valor_total), 0) as total
+            FROM vendas WHERE status NOT ILIKE '%cancelad%' AND data_hora >= $1 GROUP BY mes
+        `, [dataInicioJanela]);
+
+        const lancamentosQuery = await pool.query(`
+            SELECT TO_CHAR(l.data_vencimento, 'YYYY-MM') as mes, c.dre_ref, c.nome, c.tipo, l.status, COALESCE(SUM(l.valor), 0) as total
+            FROM fin_lancamentos l JOIN fin_categorias c ON l.categoria_id = c.id
+            WHERE c.dre_ref != 'movimentacao_interna' AND l.data_vencimento >= $1
+            GROUP BY mes, c.dre_ref, c.nome, c.tipo, l.status
+        `, [dataInicioJanela]);
+
         const dataAtual = new Date();
         const mesAtualStr = `${dataAtual.getFullYear()}-${String(dataAtual.getMonth() + 1).padStart(2, '0')}`;
 
-        // Consolida a matemática mês a mês
-        const fluxoCaixa = meses.map(mes => {
+        // 4. Monta a escadinha e rola o saldo
+        const fluxoCaixa = [];
+        for (let mes of meses) {
             const vendasMes = parseFloat(vendasQuery.rows.find(v => v.mes === mes)?.total || 0);
             const lancamentosMes = lancamentosQuery.rows.filter(l => l.mes === mes);
             
             let receitas_manuais = 0;
             let cmv = 0, desp_op = 0, desp_vendas = 0, impostos = 0, financeiras = 0, investimentos = 0;
-
-            // 🧠 NOVO: Memória de detalhes por mês
-            let detalhes = {
-                receitas_manuais: {}, cmv: {}, despesas_operacionais: {}, 
-                despesas_vendas: {}, deducoes: {}, financeiras_invest: {}
-            };
+            let detalhes = { receitas_manuais: {}, cmv: {}, despesas_operacionais: {}, despesas_vendas: {}, deducoes: {}, financeiras_invest: {} };
 
             lancamentosMes.forEach(l => {
-                // REGRA DE OURO: Se o mês já passou, só conta o que foi 'Pago'. Se é atual ou futuro, conta tudo (Previsto)
+                // EXIGE liquidação (Pago) se o mês já passou. Permite projeção se for atual/futuro.
                 if (mes < mesAtualStr && l.status !== 'Pago') return;
-
-                // IGNORA TRANSFERÊNCIAS INTERNAS E FECHAMENTOS
-                if (l.dre_ref === 'movimentacao_interna') return;
 
                 const valor = parseFloat(l.total);
                 if (l.tipo === 'Receita') {
                     receitas_manuais += valor;
                     detalhes.receitas_manuais[l.nome] = (detalhes.receitas_manuais[l.nome] || 0) + valor;
-                }
-                if (l.tipo === 'Despesa') {
+                } else if (l.tipo === 'Despesa') {
                     if (l.dre_ref === 'cmv') { cmv += valor; detalhes.cmv[l.nome] = (detalhes.cmv[l.nome] || 0) + valor; }
                     else if (l.dre_ref === 'despesas_operacionais') { desp_op += valor; detalhes.despesas_operacionais[l.nome] = (detalhes.despesas_operacionais[l.nome] || 0) + valor; }
                     else if (l.dre_ref === 'despesas_vendas') { desp_vendas += valor; detalhes.despesas_vendas[l.nome] = (detalhes.despesas_vendas[l.nome] || 0) + valor; }
                     else if (l.dre_ref === 'deducoes') { impostos += valor; detalhes.deducoes[l.nome] = (detalhes.deducoes[l.nome] || 0) + valor; }
-                    else if (l.dre_ref === 'investimentos') { investimentos += valor; detalhes.financeiras_invest[l.nome] = (detalhes.financeiras_invest[l.nome] || 0) + valor; }
                     else { financeiras += valor; detalhes.financeiras_invest[l.nome] = (detalhes.financeiras_invest[l.nome] || 0) + valor; }
                 }
             });
 
-            // Converte o formato para o Frontend ler facilmente
             const formatDetails = (obj) => Object.keys(obj).map(k => ({ nome: k, total: obj[k] }));
 
             const receita_total = vendasMes + receitas_manuais;
             const despesa_total = cmv + desp_op + desp_vendas + impostos + financeiras + investimentos;
+            
+            // 👇 EXECUTA A ROLAGEM MÊS A MÊS
+            const saldo_inicial_mes = saldoAcumulado;
+            const geracao_caixa = receita_total - despesa_total; // O que sobrou SÓ no mês
+            saldoAcumulado += geracao_caixa; // Soma à conta bancária e empurra pro próximo mês
+            const saldo_final_mes = saldoAcumulado;
 
-            return {
+            fluxoCaixa.push({
                 mes,
+                saldo_inicial: saldo_inicial_mes,
                 receita_vendas: vendasMes,
                 receitas_manuais,
                 receita_total,
                 cmv, desp_op, desp_vendas, impostos, financeiras, investimentos,
                 despesa_total,
-                saldo_mes: receita_total - despesa_total,
+                saldo_mes: geracao_caixa, // Antigo "Sobra"
+                saldo_final: saldo_final_mes,
                 detalhes: {
                     receitas_manuais: formatDetails(detalhes.receitas_manuais),
                     cmv: formatDetails(detalhes.cmv),
@@ -1921,8 +1946,8 @@ app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
                     deducoes: formatDetails(detalhes.deducoes),
                     financeiras_invest: formatDetails(detalhes.financeiras_invest)
                 }
-            };
-        });
+            });
+        }
 
         res.json(fluxoCaixa);
     } catch (e) {
