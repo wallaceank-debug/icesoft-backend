@@ -186,6 +186,9 @@ pool.connect()
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS mostrar_estoque BOOLEAN DEFAULT false");
         // 👇 NOVO: Cria a coluna de inativação no banco de dados
         await pool.query("ALTER TABLE fin_categorias ADD COLUMN IF NOT EXISTS ativa BOOLEAN DEFAULT true");
+        // 🚚 NOVAS COLUNAS PARA FRETE E CUPOM SEPARADOS
+        await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS taxa_entrega DECIMAL(10,2) DEFAULT 0.00");
+        await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS desconto DECIMAL(10,2) DEFAULT 0.00");
 
         // 🛠️ AUTO-CURA AMPLIADA: Sincroniza os contadores de IDs para todas as tabelas de alto fluxo
         try {
@@ -275,18 +278,20 @@ app.get('/api/vendas/cliente/:telefone', async (req, res) => {
 
 app.post('/api/vendas', async (req, res) => { 
     try { 
-        const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id } = req.body;
+        // 👇 AQUI ENSINAMOS O SERVIDOR A OUVIR taxa_entrega e desconto
+        const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, taxa_entrega, desconto } = req.body;
         const valorFinal = valor_total || total || 0;
         const origemFinal = origem || 'Balcão';
         
         const queryDiario = await pool.query("SELECT COALESCE(MAX(numero_diario), 0) + 1 AS proximo FROM vendas WHERE data_diaria = CURRENT_DATE");
         const numeroDiario = queryDiario.rows[0].proximo;
 
+        // 👇 AQUI ENSINAMOS O BANCO A GUARDAR ESSAS INFORMAÇÕES
         await pool.query(
-            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, numero_diario, data_diaria) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE)`, 
-            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario]
-        ); 
+            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, numero_diario, data_diaria, taxa_entrega, desconto) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14)`, 
+            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario, taxa_entrega || 0, desconto || 0]
+        );
 
         // Avisa todos os dispositivos conectados que tem pedido novo!
         io.emit('novo_pedido_kanban', { 
