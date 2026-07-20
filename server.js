@@ -189,6 +189,8 @@ pool.connect()
         // 🚚 NOVAS COLUNAS PARA FRETE E CUPOM SEPARADOS
         await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS taxa_entrega DECIMAL(10,2) DEFAULT 0.00");
         await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS desconto DECIMAL(10,2) DEFAULT 0.00");
+        // 👇 NOVA: Aumenta o tamanho da coluna forma_pagamento para caber o texto do Pagamento Dividido
+        await pool.query("ALTER TABLE vendas ALTER COLUMN forma_pagamento TYPE TEXT");
 
         // 🛠️ AUTO-CURA AMPLIADA: Sincroniza os contadores de IDs para todas as tabelas de alto fluxo
         try {
