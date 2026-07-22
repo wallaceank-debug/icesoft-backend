@@ -189,6 +189,7 @@ pool.connect()
         // 🚚 NOVAS COLUNAS PARA FRETE E CUPOM SEPARADOS
         await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS taxa_entrega DECIMAL(10,2) DEFAULT 0.00");
         await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS desconto DECIMAL(10,2) DEFAULT 0.00");
+        await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cupom_usado VARCHAR(50) DEFAULT NULL");
         // 👇 NOVA: Aumenta o tamanho da coluna forma_pagamento para caber o texto do Pagamento Dividido
         await pool.query("ALTER TABLE vendas ALTER COLUMN forma_pagamento TYPE TEXT");
 
@@ -267,6 +268,70 @@ app.get('/api/vendas', verificarToken, async (req, res) => {
 });
 
 // ==========================================
+// 🎟️ NOVO: VALIDAÇÃO DE CUPOM BLINDADA (POR CELULAR)
+// ==========================================
+app.post('/api/cupons/validar', async (req, res) => {
+    try {
+        const { codigo, telefone, subtotal } = req.body;
+        if (!codigo || !telefone) return res.status(400).json({ erro: "Código e celular são obrigatórios." });
+
+        const config = (await pool.query("SELECT valor FROM configuracoes WHERE chave = 'cupons_delivery'")).rows[0];
+        if (!config) return res.status(400).json({ erro: "Nenhum cupom ativo no momento." });
+
+        let cupons = [];
+        try { cupons = JSON.parse(config.valor); } catch(e) {}
+
+        const cupom = cupons.find(c => c.codigo.toUpperCase() === codigo.toUpperCase());
+        if (!cupom) return res.status(400).json({ erro: "Cupom inválido ou inexistente." });
+
+        // 1. Regra de Valor Mínimo
+        if (cupom.minimo > 0 && subtotal < cupom.minimo) {
+            return res.status(400).json({ erro: `Este cupom exige pedidos acima de R$ ${cupom.minimo.toFixed(2).replace('.',',')}` });
+        }
+
+        // 2. Regra de Validade
+        if (cupom.validade) {
+            const dataSP = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+            if (dataSP > cupom.validade) return res.status(400).json({ erro: "Este cupom já expirou!" });
+        }
+
+        // 3. Regra de Limite Total do Sistema
+        if (cupom.limite > 0 && cupom.usos_atuais >= cupom.limite) {
+            return res.status(400).json({ erro: "Este cupom atingiu o limite máximo de usos!" });
+        }
+
+        // 4. MÁGICA: A Regra de Público (Exatamente a que você escolhe na tela!)
+        const countQuery = await pool.query("SELECT COUNT(*) as total FROM vendas WHERE cliente_telefone = $1 AND status NOT ILIKE '%cancelad%'", [telefone]);
+        const totalPedidos = parseInt(countQuery.rows[0].total) || 0;
+
+        // Se for BEMVINDO15 (Só Clientes Novos)
+        if (cupom.publico === 'novos' && totalPedidos > 0) {
+            return res.status(400).json({ erro: "Exclusivo para a primeira compra!" });
+        }
+        
+        // Se for Só Recorrentes
+        if (cupom.publico === 'recorrentes' && totalPedidos === 0) {
+            return res.status(400).json({ erro: "Exclusivo para clientes recorrentes!" });
+        }
+
+        // Se você escolheu a nova opção "Uso Único", a trava de celular entra em ação
+        if (cupom.publico === 'unico') {
+            const usoAnterior = await pool.query("SELECT id FROM vendas WHERE cliente_telefone = $1 AND UPPER(cupom_usado) = $2 AND status NOT ILIKE '%cancelad%'", [telefone, codigo.toUpperCase()]);
+            if (usoAnterior.rows.length > 0) {
+                return res.status(400).json({ erro: "Você já utilizou este cupom!" });
+            }
+        }
+        
+        // Se for 'todos', ele passa direto sem nenhuma trava. (Perfeito para Gamificação!)
+
+        res.json({ sucesso: true, cupom });
+    } catch (e) {
+        console.error("Erro ao validar cupom:", e);
+        res.status(500).json({ erro: "Erro interno no servidor." });
+    }
+});
+
+// ==========================================
 // ROTA PÚBLICA SEGURA PARA O CRM DO CARDÁPIO DIGITAL
 // ==========================================
 app.get('/api/vendas/cliente/:telefone', async (req, res) => {
@@ -280,8 +345,8 @@ app.get('/api/vendas/cliente/:telefone', async (req, res) => {
 
 app.post('/api/vendas', async (req, res) => { 
     try { 
-        // 👇 AQUI ENSINAMOS O SERVIDOR A OUVIR taxa_entrega e desconto
-        const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, taxa_entrega, desconto } = req.body;
+        // 👇 AQUI ENSINAMOS O SERVIDOR A OUVIR taxa_entrega, desconto e cupom_usado
+        const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, taxa_entrega, desconto, cupom_usado } = req.body;
         const valorFinal = valor_total || total || 0;
         const origemFinal = origem || 'Balcão';
         
@@ -290,10 +355,26 @@ app.post('/api/vendas', async (req, res) => {
 
         // 👇 AQUI ENSINAMOS O BANCO A GUARDAR ESSAS INFORMAÇÕES
         await pool.query(
-            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, numero_diario, data_diaria, taxa_entrega, desconto) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14)`, 
-            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario, taxa_entrega || 0, desconto || 0]
+            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, numero_diario, data_diaria, taxa_entrega, desconto, cupom_usado) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14, $15)`, 
+            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario, taxa_entrega || 0, desconto || 0, cupom_usado || null]
         );
+
+        // 👇 BAIXA AUTOMÁTICA DO CUPOM (Incrementa uso e soma receita gerada)
+        if (cupom_usado && desconto > 0) {
+            try {
+                const config = (await pool.query("SELECT valor FROM configuracoes WHERE chave = 'cupons_delivery'")).rows[0];
+                if (config) {
+                    let cupons = JSON.parse(config.valor);
+                    let idx = cupons.findIndex(c => c.codigo.toUpperCase() === cupom_usado.toUpperCase());
+                    if (idx !== -1) {
+                        cupons[idx].usos_atuais = (cupons[idx].usos_atuais || 0) + 1;
+                        cupons[idx].receita_gerada = (parseFloat(cupons[idx].receita_gerada) || 0) + parseFloat(valorFinal);
+                        await pool.query("UPDATE configuracoes SET valor = $1 WHERE chave = 'cupons_delivery'", [JSON.stringify(cupons)]);
+                    }
+                }
+            } catch (errCupom) { console.error("Erro ao registrar estatísticas do cupom:", errCupom); }
+        }
 
         // Avisa todos os dispositivos conectados que tem pedido novo!
         io.emit('novo_pedido_kanban', { 
