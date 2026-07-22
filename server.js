@@ -412,6 +412,10 @@ app.post('/api/vendas', async (req, res) => {
                 const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
                 const config = configQuery.rows[0];
 
+                // 👇 NOVO: Buscamos o tempo de entrega atualizado estipulado na gestão
+                const tempoQuery = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'tempo_entrega'");
+                const tempoEstimado = tempoQuery.rows.length > 0 ? tempoQuery.rows[0].valor : '45';
+
                 if (config && config.zap_url && config.zap_key && config.zap_instancia) {
                     const primeiroNome = cliente_nome ? cliente_nome.split(' ')[0] : 'Cliente';
                     let textoPronto = '';
@@ -419,7 +423,7 @@ app.post('/api/vendas', async (req, res) => {
 
                     // 🛡️ A MÁGICA: Agora o robô trata as 'Mesas' com a mesma mensagem e fidelidade do 'Balcão'
                     if ((origemFinal.toLowerCase().includes('balcão') || origemFinal.toLowerCase().includes('mesas')) && status === 'Concluída' && config.msg_balcao && config.msg_balcao.trim() !== '') {
-                        textoPronto = config.msg_balcao.replace(/{nome}/g, primeiroNome).replace(/{pedido}/g, numeroDiario || 'Novo');
+                        textoPronto = config.msg_balcao.replace(/{nome}/g, primeiroNome).replace(/{pedido}/g, numeroDiario || 'Novo').replace(/{tempo}/g, tempoEstimado);
                         enviarMsg = true;
 
                         let resumo = `\n\n*🛒 Resumo da Compra:*\n`;
@@ -450,7 +454,7 @@ app.post('/api/vendas', async (req, res) => {
                         } catch(erroFid) {}
                         textoPronto += resumo;
                     } else if (config.msg_recebido && config.msg_recebido.trim() !== '') {
-                        textoPronto = config.msg_recebido.replace(/{nome}/g, primeiroNome).replace(/{pedido}/g, numeroDiario || 'Novo');
+                        textoPronto = config.msg_recebido.replace(/{nome}/g, primeiroNome).replace(/{pedido}/g, numeroDiario || 'Novo').replace(/{tempo}/g, tempoEstimado);
                         enviarMsg = true;
                     }
 
@@ -547,6 +551,10 @@ app.put('/api/vendas/:id/status', async (req, res) => {
             const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
             const config = configQuery.rows[0];
 
+            // 👇 NOVO: Buscamos o tempo de entrega estipulado na gestão
+            const tempoQuery = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'tempo_entrega'");
+            const tempoEstimado = tempoQuery.rows.length > 0 ? tempoQuery.rows[0].valor : '45';
+
             if (config && config.zap_url && config.zap_key && config.zap_instancia) {
                 let textoMensagem = null;
                 if (novoStatus === 'A Preparar' && config.msg_aceito) textoMensagem = config.msg_aceito;
@@ -555,7 +563,8 @@ app.put('/api/vendas/:id/status', async (req, res) => {
 
                 if (textoMensagem) {
                     const primeiroNome = venda.cliente_nome ? venda.cliente_nome.split(' ')[0] : 'Cliente';
-                    let textoPronto = textoMensagem.replace(/{nome}/g, primeiroNome).replace(/{pedido}/g, venda.numero_diario || venda.id);
+                    // 👇 NOVO: Substitui a variável {tempo} pelo tempo real no texto
+                    let textoPronto = textoMensagem.replace(/{nome}/g, primeiroNome).replace(/{pedido}/g, venda.numero_diario || venda.id).replace(/{tempo}/g, tempoEstimado);
 
                     if (novoStatus === 'A Preparar') {
                         let resumo = `\n\n*🛒 Resumo do seu pedido:*\n`;
