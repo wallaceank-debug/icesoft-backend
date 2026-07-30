@@ -184,12 +184,29 @@ pool.connect()
         // 📦 NOVAS COLUNAS DO ESTOQUE INTELIGENTE
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS controlar_estoque BOOLEAN DEFAULT false");
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS mostrar_estoque BOOLEAN DEFAULT false");
+        // 👇 NOVO: Adiciona a coluna de custo para o cálculo do CMV Real
+        await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS custo DECIMAL(10,2) DEFAULT 0.00");
+        
+        // 📦 NOVO: Cria a tabela de Insumos e a coluna da Ficha Técnica nos Produtos
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS insumos (
+                id SERIAL PRIMARY KEY,
+                nome VARCHAR(255) NOT NULL,
+                unidade VARCHAR(20) NOT NULL,
+                custo DECIMAL(10,4) DEFAULT 0
+            );
+        `);
+        await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS insumos_json JSONB DEFAULT '[]'");
+        
         // 👇 NOVO: Cria a coluna de inativação no banco de dados
         await pool.query("ALTER TABLE fin_categorias ADD COLUMN IF NOT EXISTS ativa BOOLEAN DEFAULT true");
         // 🚚 NOVAS COLUNAS PARA FRETE E CUPOM SEPARADOS
         await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS taxa_entrega DECIMAL(10,2) DEFAULT 0.00");
         await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS desconto DECIMAL(10,2) DEFAULT 0.00");
         await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cupom_usado VARCHAR(50) DEFAULT NULL");
+        // 👇 NOVO: Colunas para armazenar o lucro real e baixar o estoque de matérias-primas
+        await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS custo_real DECIMAL(10,2) DEFAULT 0.00");
+        await pool.query("ALTER TABLE insumos ADD COLUMN IF NOT EXISTS estoque DECIMAL(10,4) DEFAULT 0");
         // 👇 NOVA: Aumenta o tamanho da coluna forma_pagamento para caber o texto do Pagamento Dividido
         await pool.query("ALTER TABLE vendas ALTER COLUMN forma_pagamento TYPE TEXT");
 
@@ -353,12 +370,38 @@ app.post('/api/vendas', async (req, res) => {
         const queryDiario = await pool.query("SELECT COALESCE(MAX(numero_diario), 0) + 1 AS proximo FROM vendas WHERE data_diaria = CURRENT_DATE");
         const numeroDiario = queryDiario.rows[0].proximo;
 
-        // 👇 AQUI ENSINAMOS O BANCO A GUARDAR ESSAS INFORMAÇÕES
+        // 🧠 MOTOR DO CMV: Lendo os insumos do carrinho e somando o custo
+        let custoRealTotal = 0;
+        let mapBaixaInsumos = {};
+        let itensParsed = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
+        
+        itensParsed.forEach(item => {
+            let qtdProduto = Number(item.quantidade) || 1;
+            custoRealTotal += ((Number(item.custo_unitario) || 0) * qtdProduto);
+            
+            if (item.insumos && Array.isArray(item.insumos)) {
+                item.insumos.forEach(ins => {
+                    if (ins.id_insumo) {
+                        if (!mapBaixaInsumos[ins.id_insumo]) mapBaixaInsumos[ins.id_insumo] = 0;
+                        mapBaixaInsumos[ins.id_insumo] += (Number(ins.qtd) * qtdProduto);
+                    }
+                });
+            }
+        });
+
+        // 👇 AQUI ENSINAMOS O BANCO A GUARDAR A VENDA COM O CUSTO REAL INCLUSO
         await pool.query(
-            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, numero_diario, data_diaria, taxa_entrega, desconto, cupom_usado) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14, $15)`, 
-            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itens || []), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario, taxa_entrega || 0, desconto || 0, cupom_usado || null]
+            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, numero_diario, data_diaria, taxa_entrega, desconto, cupom_usado, custo_real) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14, $15, $16)`, 
+            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itensParsed), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario, taxa_entrega || 0, desconto || 0, cupom_usado || null, custoRealTotal]
         );
+
+        // 🥣 BAIXA DO ESTOQUE DE MATÉRIAS-PRIMAS DA FICHA TÉCNICA
+        try {
+            for (let id_insumo in mapBaixaInsumos) {
+                await pool.query("UPDATE insumos SET estoque = estoque - $1 WHERE id = $2", [mapBaixaInsumos[id_insumo], id_insumo]);
+            }
+        } catch (erroInsumos) { console.error("❌ Erro ao baixar insumos:", erroInsumos); }
 
         // 👇 BAIXA AUTOMÁTICA DO CUPOM (Incrementa uso e soma receita gerada)
         if (cupom_usado && desconto > 0) {
@@ -917,10 +960,42 @@ app.delete('/api/mesas/:id', async (req, res) => { try { await pool.query('DELET
 
 app.put('/api/produtos/:id/estoque', async (req, res) => { try { await pool.query('UPDATE produtos SET estoque = $1 WHERE id = $2', [req.body.estoque, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro: "Erro"}); } });
 app.get('/api/status', (req, res) => res.json({ mensagem: "✅ Motor v5.0 pronto!" }));
+
+// ==========================================
+// 🥣 API DE INSUMOS (MATÉRIAS-PRIMAS)
+// ==========================================
+app.get('/api/insumos', async (req, res) => { try { res.json((await pool.query('SELECT * FROM insumos ORDER BY nome ASC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
+app.post('/api/insumos', async (req, res) => { try { res.json({ sucesso: true, insumo: (await pool.query('INSERT INTO insumos (nome, unidade, custo) VALUES ($1, $2, $3) RETURNING *', [req.body.nome, req.body.unidade, req.body.custo || 0])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
+app.delete('/api/insumos/:id', async (req, res) => { try { await pool.query('DELETE FROM insumos WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
+
+// 👇 NOVO: Rota para Lançar Compra / Abastecer Estoque
+app.put('/api/insumos/:id/abastecer', async (req, res) => {
+    try {
+        const { quantidade, valor_total } = req.body;
+        const qtd = parseFloat(quantidade);
+        const valor = parseFloat(valor_total);
+        
+        if (isNaN(qtd) || qtd <= 0 || isNaN(valor) || valor < 0) return res.status(400).json({erro: "Valores inválidos"});
+
+        // A MÁGICA FINANCEIRA: Descobre o novo preço de custo unitário baseado na última compra
+        const custo_unitario = valor / qtd;
+
+        // Atualiza o banco: Soma a quantidade na geladeira e atualiza o custo por grama/unidade
+        const result = await pool.query(
+            'UPDATE insumos SET estoque = COALESCE(estoque, 0) + $1, custo = $2 WHERE id = $3 RETURNING *',
+            [qtd, custo_unitario, req.params.id]
+        );
+        res.json({ sucesso: true, insumo: result.rows[0] });
+    } catch (e) {
+        console.error("Erro ao abastecer:", e);
+        res.status(500).json({erro: "Erro ao abastecer insumo"});
+    }
+});
+
 app.get('/api/produtos', async (req, res) => { try { res.json((await pool.query('SELECT * FROM produtos ORDER BY ordem ASC, id ASC')).rows.map(p => ({...p, preco: parseFloat(p.preco)}))); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/produtos/ordem', async (req, res) => { try { for (let p of req.body) { await pool.query('UPDATE produtos SET ordem = $1 WHERE id = $2', [p.ordem, p.id]); } res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro: "Erro"}); } });
-app.post('/api/produtos', async (req, res) => { try { res.json({ sucesso: true, produto: (await pool.query('INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, tag, tipo_promocao, valor_promocao, promo_dias, promo_inicio, promo_fim, promo_pdv, categorias_adicionais, controlar_estoque, mostrar_estoque) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING *', [req.body.nome, req.body.descricao, req.body.preco, req.body.emoji, req.body.categoria || 'Outros', req.body.grupos_ids || [], req.body.imagem_url, req.body.venda_por_peso || false, req.body.tag || '', req.body.tipo_promocao || 'nenhuma', req.body.valor_promocao || 0, req.body.promo_dias || '', req.body.promo_inicio || '', req.body.promo_fim || '', req.body.promo_pdv || false, JSON.stringify(req.body.categorias_adicionais || []), req.body.controlar_estoque || false, req.body.mostrar_estoque || false])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
-app.put('/api/produtos/:id', async (req, res) => { try { res.json({ sucesso: true, produto: (await pool.query('UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7, venda_por_peso = $8, tag = $9, tipo_promocao = $10, valor_promocao = $11, promo_dias = $12, promo_inicio = $13, promo_fim = $14, promo_pdv = $15, categorias_adicionais = $16, controlar_estoque = $17, mostrar_estoque = $18 WHERE id = $19 RETURNING *', [req.body.nome, req.body.descricao, req.body.preco, req.body.emoji, req.body.categoria || 'Outros', req.body.grupos_ids || [], req.body.imagem_url, req.body.venda_por_peso || false, req.body.tag || '', req.body.tipo_promocao || 'nenhuma', req.body.valor_promocao || 0, req.body.promo_dias || '', req.body.promo_inicio || '', req.body.promo_fim || '', req.body.promo_pdv || false, JSON.stringify(req.body.categorias_adicionais || []), req.body.controlar_estoque || false, req.body.mostrar_estoque || false, req.params.id])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
+app.post('/api/produtos', async (req, res) => { try { res.json({ sucesso: true, produto: (await pool.query('INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, tag, tipo_promocao, valor_promocao, promo_dias, promo_inicio, promo_fim, promo_pdv, categorias_adicionais, controlar_estoque, mostrar_estoque, custo, insumos_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING *', [req.body.nome, req.body.descricao, req.body.preco, req.body.emoji, req.body.categoria || 'Outros', req.body.grupos_ids || [], req.body.imagem_url, req.body.venda_por_peso || false, req.body.tag || '', req.body.tipo_promocao || 'nenhuma', req.body.valor_promocao || 0, req.body.promo_dias || '', req.body.promo_inicio || '', req.body.promo_fim || '', req.body.promo_pdv || false, JSON.stringify(req.body.categorias_adicionais || []), req.body.controlar_estoque || false, req.body.mostrar_estoque || false, req.body.custo || 0, req.body.insumos_json || '[]'])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
+app.put('/api/produtos/:id', async (req, res) => { try { res.json({ sucesso: true, produto: (await pool.query('UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7, venda_por_peso = $8, tag = $9, tipo_promocao = $10, valor_promocao = $11, promo_dias = $12, promo_inicio = $13, promo_fim = $14, promo_pdv = $15, categorias_adicionais = $16, controlar_estoque = $17, mostrar_estoque = $18, custo = $19, insumos_json = $20 WHERE id = $21 RETURNING *', [req.body.nome, req.body.descricao, req.body.preco, req.body.emoji, req.body.categoria || 'Outros', req.body.grupos_ids || [], req.body.imagem_url, req.body.venda_por_peso || false, req.body.tag || '', req.body.tipo_promocao || 'nenhuma', req.body.valor_promocao || 0, req.body.promo_dias || '', req.body.promo_inicio || '', req.body.promo_fim || '', req.body.promo_pdv || false, JSON.stringify(req.body.categorias_adicionais || []), req.body.controlar_estoque || false, req.body.mostrar_estoque || false, req.body.custo || 0, req.body.insumos_json || '[]', req.params.id])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
 app.delete('/api/produtos/:id', async (req, res) => { try { await pool.query('DELETE FROM produtos WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/produtos/:id/status', async (req, res) => { try { await pool.query('UPDATE produtos SET ativo = $1 WHERE id = $2', [req.body.ativo, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.get('/api/grupos', async (req, res) => { try { res.json((await pool.query('SELECT * FROM grupos_adicionais ORDER BY id DESC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
@@ -1694,13 +1769,14 @@ app.get('/api/financeiro/dre', async (req, res) => {
         const resultado = await pool.query(query);
         
         const vendasMesQuery = await pool.query(`
-            SELECT COALESCE(SUM(valor_total), 0) as total 
+            SELECT COALESCE(SUM(valor_total), 0) as total, COALESCE(SUM(custo_real), 0) as custo_consumido 
             FROM vendas 
             WHERE status NOT ILIKE '%cancelad%'
             AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
             AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
         `);
         const faturamentoAutomaticoMes = parseFloat(vendasMesQuery.rows[0].total);
+        const cmvConsumidoMes = parseFloat(vendasMesQuery.rows[0].custo_consumido);
 
         const dre = {
             receita_bruta: 0, deducoes: 0, cmv: 0, 
@@ -1735,6 +1811,10 @@ app.get('/api/financeiro/dre', async (req, res) => {
         if (faturamentoAutomaticoMes > 0) {
             dre.detalhes['receita_bruta'].push({ nome: 'Faturamento de Vendas (PDV/Delivery)', total: faturamentoAutomaticoMes });
         }
+
+        dre.cmv_financeiro = dre.cmv; // Guarda silenciosamente o que saiu da conta bancária
+        dre.cmv = cmvConsumidoMes; // 🚀 Substitui o CMV do DRE pelo custo real da Ficha Técnica
+        dre.detalhes['cmv'] = [ { nome: 'Custo das Fichas Técnicas (Insumos Consumidos)', total: cmvConsumidoMes } ];
 
         dre.receita_bruta = dre.receita_bruta + faturamentoAutomaticoMes;
         dre.outras_receitas = dre.outras_receitas + dre.aporte_capital;
@@ -2139,9 +2219,10 @@ app.get('/api/financeiro/alertas', async (req, res) => {
         const dre = { cmv: 0, despesas_operacionais: 0, despesas_financeiras: 0, deducoes: 0, despesas_vendas: 0 };
         resDRE.rows.forEach(r => { if(dre[r.dre_ref] !== undefined) dre[r.dre_ref] = parseFloat(r.total); });
         
-        // 2. Faturamento Bruto e Ticket Médio
-        const vendasMes = await pool.query("SELECT COALESCE(SUM(valor_total), 0) as total, COUNT(*) as qtd FROM vendas WHERE status NOT ILIKE '%cancelad%' AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)");
+        // 2. Faturamento Bruto, Ticket Médio e Custo Real
+        const vendasMes = await pool.query("SELECT COALESCE(SUM(valor_total), 0) as total, COALESCE(SUM(custo_real), 0) as custo_consumido, COUNT(*) as qtd FROM vendas WHERE status NOT ILIKE '%cancelad%' AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)");
         const faturamentoPDV = parseFloat(vendasMes.rows[0].total);
+        const cmvConsumido = parseFloat(vendasMes.rows[0].custo_consumido);
         const qtdPedidos = parseInt(vendasMes.rows[0].qtd) || 1;
         
         const receitasManuais = await pool.query("SELECT COALESCE(SUM(l.valor), 0) as total FROM fin_lancamentos l JOIN fin_categorias c ON l.categoria_id = c.id WHERE l.tipo = 'Receita' AND l.status = 'Pago' AND c.dre_ref != 'movimentacao_interna' AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)");
@@ -2162,12 +2243,19 @@ app.get('/api/financeiro/alertas', async (req, res) => {
         // 4. Montagem dos Alertas
         const alertas = [];
         
-        // A) Termômetro do CMV
-        let pctCMV = faturamentoTotal > 0 ? (dre.cmv / faturamentoTotal) * 100 : 0;
-        if (pctCMV > 35) {
-            alertas.push({ tipo: 'perigo', icone: 'soup_kitchen', titulo: `CMV Elevado (${pctCMV.toFixed(1)}%)`, texto: 'Seus custos com ingredientes/embalagens estão muito altos. O ideal é abaixo de 35%. Negocie com fornecedores urgentemente!' });
-        } else if (pctCMV > 0 && pctCMV <= 35) {
-            alertas.push({ tipo: 'sucesso', icone: 'verified', titulo: `CMV Saudável (${pctCMV.toFixed(1)}%)`, texto: 'Seus custos com insumos estão controlados perfeitamente dentro da margem ideal.' });
+        // A) Termômetro do CMV e Desperdício
+        const cmvFinanceiro = dre.cmv; // O que foi pago a fornecedores
+        const diferencaEstoque = cmvFinanceiro - cmvConsumido;
+        let pctCMVReal = faturamentoTotal > 0 ? (cmvConsumido / faturamentoTotal) * 100 : 0;
+        
+        if (pctCMVReal > 35) {
+            alertas.push({ tipo: 'perigo', icone: 'soup_kitchen', titulo: `Custo da Receita Elevado (${pctCMVReal.toFixed(1)}%)`, texto: 'Sua Ficha Técnica está cara! O ideal é abaixo de 35%. Reveja as porções de açaí e adicionais ou aumente os preços.' });
+        } else if (pctCMVReal > 0) {
+            alertas.push({ tipo: 'sucesso', icone: 'verified', titulo: `Ficha Técnica Saudável (${pctCMVReal.toFixed(1)}%)`, texto: 'As porções dos produtos vendidos estão com a margem de lucro perfeita.' });
+        }
+
+        if (diferencaEstoque > (faturamentoTotal * 0.05)) { // Mais de 5% de diferença
+            alertas.push({ tipo: 'alerta', icone: 'inventory', titulo: `Estoque Parado ou Perda (R$ ${diferencaEstoque.toFixed(2).replace('.', ',')})`, texto: 'Você pagou muito mais aos fornecedores do que as vendas consumiram. Verifique se há muita mercadoria estocada nas geladeiras ou desperdício na montagem.' });
         }
 
         // B) Radar de Custos Fixos
