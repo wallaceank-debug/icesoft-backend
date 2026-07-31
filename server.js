@@ -2018,6 +2018,8 @@ app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
         
         for (let i = -5; i <= 6; i++) {
             const d = new Date();
+            // 🛡️ VACINA ANTI-PULO: Trava no dia 1 para não bugar em meses de 31 dias
+            d.setDate(1); 
             d.setMonth(d.getMonth() + i);
             const ano = d.getFullYear();
             const mes = String(d.getMonth() + 1).padStart(2, '0');
