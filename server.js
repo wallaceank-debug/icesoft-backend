@@ -529,6 +529,7 @@ app.post('/api/vendas', async (req, res) => {
 app.put('/api/vendas/:id/status', async (req, res) => { 
     try { 
         const novoStatus = req.body.status;
+        const retornarEstoque = req.body.retornar_estoque !== false; // Padrão é true
         const idVenda = req.params.id;
 
         // 1. Pega a venda ANTES de alterar para saber os itens e valores
@@ -543,28 +544,50 @@ app.put('/api/vendas/:id/status', async (req, res) => {
         // 🛡️ MÁGICA DA AUDITORIA: ESTORNO E ESTOQUE
         // ==========================================
         if (novoStatus.toLowerCase().includes('cancelad') && venda) {
-            // A. Devolve os produtos para o estoque
-            try {
-                let itensComprados = typeof venda.itens === 'string' ? JSON.parse(venda.itens) : (venda.itens || []);
-                const queryEstoque = await pool.query("SELECT id, nome, estoque FROM produtos");
-                let produtosNoBanco = queryEstoque.rows.sort((a, b) => b.nome.length - a.nome.length);
+            // A. Devolve os produtos e insumos para o estoque SE solicitado na tela
+            if (retornarEstoque) {
+                try {
+                    let itensComprados = typeof venda.itens === 'string' ? JSON.parse(venda.itens) : (venda.itens || []);
+                    
+                    // 1. Devolve as MATÉRIAS-PRIMAS (Motor da Ficha Técnica)
+                    let mapDevolucaoInsumos = {};
+                    itensComprados.forEach(item => {
+                        let qtdProduto = Number(item.quantidade) || 1;
+                        if (item.insumos && Array.isArray(item.insumos)) {
+                            item.insumos.forEach(ins => {
+                                if (ins.id_insumo) {
+                                    if (!mapDevolucaoInsumos[ins.id_insumo]) mapDevolucaoInsumos[ins.id_insumo] = 0;
+                                    mapDevolucaoInsumos[ins.id_insumo] += (Number(ins.qtd) * qtdProduto);
+                                }
+                            });
+                        }
+                    });
 
-                for (let item of itensComprados) {
-                    let qtd = item.quantidade ? Number(item.quantidade) : 1;
-                    let nomeRaw = item.nome || item.produto_nome || item.nomeBase || "";
-                    if (typeof nomeRaw === 'string' && nomeRaw.trim() !== "") {
-                        let nomeBusca = nomeRaw.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-                        let p = produtosNoBanco.find(prod => {
-                            let nomeBD = prod.nome.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-                            return nomeBusca.includes(nomeBD);
-                        });
-                        if (p && p.estoque !== null) {
-                            let novoEstoque = Number(p.estoque) + qtd; // DEVOLVE PARA O ESTOQUE!
-                            await pool.query("UPDATE produtos SET estoque = $1, ativo = true WHERE id = $2", [novoEstoque, p.id]);
+                    for (let id_insumo in mapDevolucaoInsumos) {
+                        await pool.query("UPDATE insumos SET estoque = estoque + $1 WHERE id = $2", [mapDevolucaoInsumos[id_insumo], id_insumo]);
+                    }
+
+                    // 2. Devolve os PRODUTOS SIMPLES (Motor Antigo)
+                    const queryEstoque = await pool.query("SELECT id, nome, estoque FROM produtos");
+                    let produtosNoBanco = queryEstoque.rows.sort((a, b) => b.nome.length - a.nome.length);
+
+                    for (let item of itensComprados) {
+                        let qtd = item.quantidade ? Number(item.quantidade) : 1;
+                        let nomeRaw = item.nome || item.produto_nome || item.nomeBase || "";
+                        if (typeof nomeRaw === 'string' && nomeRaw.trim() !== "") {
+                            let nomeBusca = nomeRaw.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+                            let p = produtosNoBanco.find(prod => {
+                                let nomeBD = prod.nome.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+                                return nomeBusca.includes(nomeBD);
+                            });
+                            if (p && p.estoque !== null) {
+                                let novoEstoque = Number(p.estoque) + qtd; 
+                                await pool.query("UPDATE produtos SET estoque = $1, ativo = true WHERE id = $2", [novoEstoque, p.id]);
+                            }
                         }
                     }
-                }
-            } catch(e) { console.error("Erro no estoque do estorno:", e); }
+                } catch(e) { console.error("Erro no estoque do estorno:", e); }
+            }
 
             // B. Estorno Financeiro Inteligente (Verifica a máquina do tempo do caixa)
             try {
