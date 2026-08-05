@@ -1023,7 +1023,7 @@ app.get('/api/status', (req, res) => res.json({ mensagem: "✅ Motor v5.0 pronto
 // 🥣 API DE INSUMOS (MATÉRIAS-PRIMAS)
 // ==========================================
 app.get('/api/insumos', async (req, res) => { try { res.json((await pool.query('SELECT * FROM insumos ORDER BY nome ASC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
-app.post('/api/insumos', async (req, res) => { try { res.json({ sucesso: true, insumo: (await pool.query('INSERT INTO insumos (nome, unidade, custo) VALUES ($1, $2, $3) RETURNING *', [req.body.nome, req.body.unidade, req.body.custo || 0])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
+app.post('/api/insumos', async (req, res) => { try { res.json({ sucesso: true, insumo: (await pool.query('INSERT INTO insumos (nome, unidade, custo, estoque) VALUES ($1, $2, $3, $4) RETURNING *', [req.body.nome, req.body.unidade, req.body.custo || 0, req.body.estoque || 0])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
 app.delete('/api/insumos/:id', async (req, res) => { try { await pool.query('DELETE FROM insumos WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 
 // 👇 NOVO: Rota para sobrescrever o estoque na Conferência (Inventário)
