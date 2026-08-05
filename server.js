@@ -982,8 +982,38 @@ app.get('/api/caixa/:id/detalhes', async (req, res) => {
 });
 
 app.get('/api/mesas', async (req, res) => { try { res.json((await pool.query('SELECT * FROM mesas_ativas ORDER BY numero ASC')).rows); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
-app.post('/api/mesas', async (req, res) => { try { res.status(201).json((await pool.query("INSERT INTO mesas_ativas (numero, itens) VALUES ($1, $2) RETURNING *", [req.body.numero, JSON.stringify(req.body.itens || [])])).rows[0]); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
-app.put('/api/mesas/:id', async (req, res) => { try { res.json((await pool.query("UPDATE mesas_ativas SET itens = $1 WHERE id = $2 RETURNING *", [JSON.stringify(req.body.itens), req.params.id])).rows[0]); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
+
+app.post('/api/mesas', async (req, res) => { 
+    try { 
+        const novaMesa = (await pool.query("INSERT INTO mesas_ativas (numero, itens) VALUES ($1, $2) RETURNING *", [req.body.numero, JSON.stringify(req.body.itens || [])])).rows[0]; 
+        io.emit('novo_pedido_kanban', { id: 'Mesa/Comanda ' + req.body.numero, cliente: 'Novo Lançamento', status: 'A Preparar' }); // 📢 Mágica: Avisa a Cozinha!
+        res.status(201).json(novaMesa); 
+    } catch (e) { res.status(500).json({ erro: "Erro" }); } 
+});
+
+app.put('/api/mesas/:id', async (req, res) => { 
+    try { 
+        const mesa = (await pool.query("UPDATE mesas_ativas SET itens = $1 WHERE id = $2 RETURNING *", [JSON.stringify(req.body.itens), req.params.id])).rows[0]; 
+        io.emit('novo_pedido_kanban', { id: 'Mesa/Comanda ' + mesa.numero, cliente: 'Adição de Itens', status: 'A Preparar' }); // 📢 Mágica: Avisa a Cozinha!
+        res.json(mesa); 
+    } catch (e) { res.status(500).json({ erro: "Erro" }); } 
+});
+
+app.delete('/api/mesas/:id', async (req, res) => { try { await pool.query('DELETE FROM mesas_ativas WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
+
+// ==========================================
+// 🖨️ PONTE DE IMPRESSÃO REMOTA (CELULAR -> PC)
+// ==========================================
+app.post('/api/imprimir/comanda', async (req, res) => {
+    try {
+        // O servidor recebe do celular e "grita" para o PC
+        io.emit('imprimir_pedido_pc', req.body); 
+        res.json({ sucesso: true });
+    } catch (e) { 
+        res.status(500).json({ erro: "Erro ao enviar comando de impressão" }); 
+    }
+});
+
 app.delete('/api/mesas/:id', async (req, res) => { try { await pool.query('DELETE FROM mesas_ativas WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
 
 app.put('/api/produtos/:id/estoque', async (req, res) => { try { await pool.query('UPDATE produtos SET estoque = $1 WHERE id = $2', [req.body.estoque, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro: "Erro"}); } });
