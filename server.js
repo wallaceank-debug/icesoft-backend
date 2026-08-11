@@ -1056,6 +1056,76 @@ app.put('/api/insumos/:id/abastecer', async (req, res) => {
             'UPDATE insumos SET estoque = COALESCE(estoque, 0) + $1, custo = $2 WHERE id = $3 RETURNING *',
             [qtd, custo_unitario, req.params.id]
         );
+
+        // 👇 INÍCIO DA CORREÇÃO: ATUALIZAR O CUSTO NAS FICHAS TÉCNICAS
+        try {
+            const idInsumoNum = Number(req.params.id);
+            
+            // 1. Vasculha e atualiza o custo dentro dos Produtos
+            const produtos = await pool.query("SELECT id, insumos_json, custo FROM produtos WHERE insumos_json IS NOT NULL");
+            for (let p of produtos.rows) {
+                let insumos;
+                try { insumos = typeof p.insumos_json === 'string' ? JSON.parse(p.insumos_json) : (p.insumos_json || []); } catch(e) { continue; }
+                if (!Array.isArray(insumos)) continue;
+                
+                let mudou = false;
+                let novoCustoTotal = 0;
+                
+                insumos.forEach(ins => {
+                    if (Number(ins.id_insumo) === idInsumoNum) {
+                        ins.custo_unitario = custo_unitario; // Atualiza o preço da Ficha!
+                        mudou = true;
+                    }
+                    novoCustoTotal += (Number(ins.qtd) * Number(ins.custo_unitario));
+                });
+                
+                if (mudou) {
+                    await pool.query(
+                        "UPDATE produtos SET insumos_json = $1, custo = $2 WHERE id = $3",
+                        [JSON.stringify(insumos), novoCustoTotal, p.id]
+                    );
+                }
+            }
+
+            // 2. Vasculha e atualiza o custo dentro dos Grupos (Adicionais)
+            const grupos = await pool.query("SELECT id, itens FROM grupos_adicionais WHERE itens IS NOT NULL");
+            for (let g of grupos.rows) {
+                let itens;
+                try { itens = typeof g.itens === 'string' ? JSON.parse(g.itens) : (g.itens || []); } catch(e) { continue; }
+                if (!Array.isArray(itens)) continue;
+                
+                let mudouGrupo = false;
+                
+                itens.forEach(item => {
+                    let insumosItem;
+                    try { insumosItem = typeof item.insumos_json === 'string' ? JSON.parse(item.insumos_json) : (item.insumos_json || []); } catch(e) { return; }
+                    if (!Array.isArray(insumosItem)) return;
+                    
+                    let mudouItem = false;
+                    insumosItem.forEach(ins => {
+                        if (Number(ins.id_insumo) === idInsumoNum) {
+                            ins.custo_unitario = custo_unitario; // Atualiza o preço da Ficha!
+                            mudouItem = true;
+                            mudouGrupo = true;
+                        }
+                    });
+                    if (mudouItem) {
+                        item.insumos_json = JSON.stringify(insumosItem);
+                    }
+                });
+                
+                if (mudouGrupo) {
+                    await pool.query(
+                        "UPDATE grupos_adicionais SET itens = $1 WHERE id = $2",
+                        [JSON.stringify(itens), g.id]
+                    );
+                }
+            }
+        } catch (erroFicha) {
+            console.error("Erro ao atualizar fichas técnicas:", erroFicha);
+        }
+        // 👆 FIM DA CORREÇÃO
+
         res.json({ sucesso: true, insumo: result.rows[0] });
     } catch (e) {
         console.error("Erro ao abastecer:", e);
