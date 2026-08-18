@@ -1179,6 +1179,16 @@ app.delete('/api/cidades/:id', async (req, res) => { try { await pool.query('DEL
 app.get('/api/bairros', async (req, res) => { try { res.json((await pool.query('SELECT * FROM bairros ORDER BY cidade ASC, nome ASC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.post('/api/bairros', async (req, res) => { try { res.json((await pool.query('INSERT INTO bairros (nome, taxa, cidade) VALUES ($1, $2, $3) RETURNING *', [req.body.nome, req.body.taxa, req.body.cidade || 'Quatis'])).rows[0]); } catch (e) { res.status(500).json({erro:"Erro"}); } });
 app.delete('/api/bairros/:id', async (req, res) => { try { await pool.query('DELETE FROM bairros WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
+// 👇 NOVO: Rota para editar apenas a taxa de um bairro existente
+app.put('/api/bairros/:id', async (req, res) => { 
+    try { 
+        await pool.query('UPDATE bairros SET taxa = $1 WHERE id = $2', [req.body.taxa, req.params.id]); 
+        res.json({ sucesso: true }); 
+    } catch (e) { 
+        console.error("Erro ao editar taxa do bairro:", e);
+        res.status(500).json({erro:"Erro ao editar bairro"}); 
+    } 
+});
 app.get('/api/loja/status', async (req, res) => { try { res.json({ status: (await pool.query("SELECT valor FROM configuracoes WHERE chave = 'status_delivery'")).rows[0]?.valor || 'aberto' }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/loja/status', async (req, res) => { try { await pool.query("UPDATE configuracoes SET valor = $1 WHERE chave = 'status_delivery'", [req.body.status]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.get('/api/configuracoes', async (req, res) => { try { const configs = {}; (await pool.query("SELECT * FROM configuracoes")).rows.forEach(r => configs[r.chave] = r.valor); res.json(configs); } catch (e) { res.status(500).json({erro:"Erro"}); }});
