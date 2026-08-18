@@ -2146,11 +2146,48 @@ app.get('/api/financeiro/graficos', verificarToken, async (req, res) => {
         
         const metaReceita = pontoEquilibrio * 1.30; // Sugere meta de lucro 30% acima da sobrevivência
 
+        const custosVariaveis = dre.deducoes + dre.cmv + dre.despesas_vendas;
+        const custosFixos = dre.despesas_operacionais + dre.despesas_financeiras;
+        
+        // Evita divisão por zero se não tiver receita ainda
+        let margemContribuicao = totalReceitas > 0 ? ((totalReceitas - custosVariaveis) / totalReceitas) : 0.3; 
+        if (margemContribuicao <= 0) margemContribuicao = 0.01;
+        
+        let pontoEquilibrio = custosFixos / margemContribuicao;
+        if (pontoEquilibrio === 0) pontoEquilibrio = 1000; // Valor apenas para formar o visual inicial
+        
+        const metaReceita = pontoEquilibrio * 1.30; // Sugere meta de lucro 30% acima da sobrevivência
+
+        // ==========================================
+        // 📦 NOVA INTELIGÊNCIA: RAIO-X DO ESTOQUE
+        // ==========================================
+        const insumosQuery = await pool.query(`SELECT SUM(estoque * custo) as total_investido FROM insumos WHERE estoque > 0`);
+        const produtosEstoqueQuery = await pool.query(`SELECT SUM(estoque * custo) as total_investido, SUM(estoque * preco) as total_potencial FROM produtos WHERE controlar_estoque = true AND estoque > 0`);
+
+        const investidoInsumos = parseFloat(insumosQuery.rows[0].total_investido) || 0;
+        const investidoProdutos = parseFloat(produtosEstoqueQuery.rows[0].total_investido) || 0;
+        const potencialProdutos = parseFloat(produtosEstoqueQuery.rows[0].total_potencial) || 0;
+
+        // O Motor descobre o seu "Markup" real (Faturamento dividido pelo Custo). Padrão: 3x
+        let markupGeral = 3; 
+        if (dre.cmv > 0 && totalReceitas > 0) {
+            markupGeral = totalReceitas / dre.cmv;
+        }
+        
+        // Projeta o ganho dos ingredientes usando a margem de lucro comprovada da sua loja
+        const potencialInsumos = investidoInsumos * markupGeral;
+
+        const totalInvestido = investidoInsumos + investidoProdutos;
+        const totalPotencial = potencialInsumos + potencialProdutos;
+        const lucroProjetado = totalPotencial - totalInvestido;
+
+        // Envia tudo para a tela (Adicionamos o objeto estoque_metrics)
         res.json({
             resumo_mes: { receitas: totalReceitas, despesas: totalDespesas },
             despesas_pizza: despesasPorCategoria.rows,
             canais_venda: canaisQuery.rows,
-            ponto_equilibrio: { pe: pontoEquilibrio, meta: metaReceita, atual: totalReceitas }
+            ponto_equilibrio: { pe: pontoEquilibrio, meta: metaReceita, atual: totalReceitas },
+            estoque_metrics: { investido: totalInvestido, potencial: totalPotencial, lucro: lucroProjetado }
         });
     } catch (e) {
         console.error("Erro nos gráficos:", e);
