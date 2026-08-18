@@ -2504,5 +2504,74 @@ app.get('/api/marketing/dashboard', async (req, res) => {
     }
 });
 
+// ==========================================
+// 🧹 MÓDULO FAXINEIRO: CANCELAMENTO AUTOMÁTICO DE PIX FANTASMA
+// ==========================================
+setInterval(async () => {
+    try {
+        // 1. Busca pedidos gerados no PIX há mais de 10 minutos que NÃO foram pagos (ou seja, estão parados)
+        const queryFantasma = `
+            SELECT id, itens, numero_diario FROM vendas 
+            WHERE forma_pagamento ILIKE '%pix%' 
+            AND transacao_id IS NOT NULL 
+            AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Entregue', 'Concluída') 
+            AND status NOT ILIKE '%cancelad%'
+            AND data_hora <= NOW() - INTERVAL '10 minutes'
+        `;
+        const pedidosExpirados = await pool.query(queryFantasma);
+
+        for (let pedido of pedidosExpirados.rows) {
+            // 2. Altera o status no banco de dados para Cancelada
+            await pool.query("UPDATE vendas SET status = 'Cancelada (Pix Expirado)' WHERE id = $1", [pedido.id]);
+            
+            // 3. MÁGICA: Devolve os ingredientes e produtos para o estoque para não dar furo no inventário!
+            try {
+                let itensComprados = typeof pedido.itens === 'string' ? JSON.parse(pedido.itens) : (pedido.itens || []);
+                
+                // A. Devolução de Matérias-Primas (Açaí, Leite Condensado, etc)
+                let mapDevolucao = {};
+                itensComprados.forEach(item => {
+                    let qtdProduto = Number(item.quantidade) || 1;
+                    if (item.insumos && Array.isArray(item.insumos)) {
+                        item.insumos.forEach(ins => {
+                            if (ins.id_insumo) {
+                                if (!mapDevolucao[ins.id_insumo]) mapDevolucao[ins.id_insumo] = 0;
+                                mapDevolucao[ins.id_insumo] += (Number(ins.qtd) * qtdProduto);
+                            }
+                        });
+                    }
+                });
+                for (let id_insumo in mapDevolucao) {
+                    await pool.query("UPDATE insumos SET estoque = estoque + $1 WHERE id = $2", [mapDevolucao[id_insumo], id_insumo]);
+                }
+
+                // B. Devolução de Produtos de Geladeira Simples
+                const queryEstoque = await pool.query("SELECT id, nome, estoque FROM produtos");
+                let produtosNoBanco = queryEstoque.rows;
+                for (let item of itensComprados) {
+                    let qtd = item.quantidade ? Number(item.quantidade) : 1;
+                    let nomeBusca = (item.nome || item.produto_nome || item.nomeBase || "").replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+                    if (nomeBusca) {
+                        let p = produtosNoBanco.find(prod => prod.nome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().includes(nomeBusca));
+                        if (p && p.estoque !== null) {
+                            await pool.query("UPDATE produtos SET estoque = estoque + $1, ativo = true WHERE id = $2", [qtd, p.id]);
+                        }
+                    }
+                }
+            } catch(errEstoque) { console.error("Erro ao devolver estoque do Pix Expirado:", errEstoque); }
+
+            // 4. Grita no rádio para todas as telas (Kanban e Vendas) atualizarem sozinhas
+            io.emit('novo_pedido_kanban', { 
+                id: pedido.numero_diario || pedido.id, 
+                cliente: 'Sistema (Faxina Pix)', 
+                status: 'Cancelada' 
+            });
+            console.log(`🧹 Faxina Icesoft: Pedido #${pedido.id} cancelado automaticamente (Pix não pago em 10 min). Estoque devolvido.`);
+        }
+    } catch (e) {
+        console.error("Erro no Faxineiro de Pix:", e);
+    }
+}, 60 * 1000); // Executa esse bloco a cada 60 segundos exatos
+
 const PORTA = process.env.PORT || 3000;
 server.listen(PORTA, () => console.log(`🚀 Servidor Icesoft v5.0 (com WebSockets) na porta ${PORTA}!`));
