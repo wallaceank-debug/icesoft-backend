@@ -2146,18 +2146,6 @@ app.get('/api/financeiro/graficos', verificarToken, async (req, res) => {
         
         const metaReceita = pontoEquilibrio * 1.30; // Sugere meta de lucro 30% acima da sobrevivência
 
-        const custosVariaveis = dre.deducoes + dre.cmv + dre.despesas_vendas;
-        const custosFixos = dre.despesas_operacionais + dre.despesas_financeiras;
-        
-        // Evita divisão por zero se não tiver receita ainda
-        let margemContribuicao = totalReceitas > 0 ? ((totalReceitas - custosVariaveis) / totalReceitas) : 0.3; 
-        if (margemContribuicao <= 0) margemContribuicao = 0.01;
-        
-        let pontoEquilibrio = custosFixos / margemContribuicao;
-        if (pontoEquilibrio === 0) pontoEquilibrio = 1000; // Valor apenas para formar o visual inicial
-        
-        const metaReceita = pontoEquilibrio * 1.30; // Sugere meta de lucro 30% acima da sobrevivência
-
         // ==========================================
         // 📦 NOVA INTELIGÊNCIA: RAIO-X DO ESTOQUE
         // ==========================================
