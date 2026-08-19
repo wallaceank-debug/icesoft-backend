@@ -181,6 +181,7 @@ pool.connect()
     })
     .then(async () => {
         // 🛡️ Segurança: Atualiza as tabelas antigas para garantir que os campos existam
+        await pool.query("ALTER TABLE vendas ALTER COLUMN status TYPE TEXT"); // 👇 NOVO: Remove o limite de 20 letras do status para o Robô do Pix conseguir escrever
         await pool.query("ALTER TABLE mesas_ativas ALTER COLUMN numero TYPE TEXT"); // 👇 NOVO: Remove o limite de 10 letras para suportar nomes compridos de clientes nas comandas
         await pool.query("ALTER TABLE categorias ADD COLUMN IF NOT EXISTS dias_semana VARCHAR(50) DEFAULT ''");
         await pool.query("ALTER TABLE categorias ADD COLUMN IF NOT EXISTS hora_inicio VARCHAR(10) DEFAULT ''");
