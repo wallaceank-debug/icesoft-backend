@@ -215,6 +215,8 @@ pool.connect()
         await pool.query("ALTER TABLE insumos ADD COLUMN IF NOT EXISTS estoque DECIMAL(10,4) DEFAULT 0");
         // 👇 NOVA: Aumenta o tamanho da coluna forma_pagamento para caber o texto do Pagamento Dividido
         await pool.query("ALTER TABLE vendas ALTER COLUMN forma_pagamento TYPE TEXT");
+        // 💰 NOVO: Coluna inteligente para registrar valores exatos em pagamentos divididos
+        await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS pagamentos_detalhes JSONB DEFAULT NULL");
 
         // 🛠️ AUTO-CURA AMPLIADA: Sincroniza os contadores de IDs para todas as tabelas de alto fluxo
         try {
@@ -373,7 +375,7 @@ app.get('/api/vendas/cliente/:telefone', async (req, res) => {
 app.post('/api/vendas', async (req, res) => { 
     try { 
         // 👇 AQUI ENSINAMOS O SERVIDOR A OUVIR taxa_entrega, desconto e cupom_usado
-        const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, taxa_entrega, desconto, cupom_usado } = req.body;
+        const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, taxa_entrega, desconto, cupom_usado, pagamentos_detalhes } = req.body;
         const valorFinal = valor_total || total || 0;
         const origemFinal = origem || 'Balcão';
         
@@ -399,11 +401,11 @@ app.post('/api/vendas', async (req, res) => {
             }
         });
 
-        // 👇 AQUI ENSINAMOS O BANCO A GUARDAR A VENDA COM O CUSTO REAL INCLUSO
+        // 👇 AQUI ENSINAMOS O BANCO A GUARDAR A VENDA COM O CUSTO REAL E OS PAGAMENTOS DIVIDIDOS
         await pool.query(
-            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, numero_diario, data_diaria, taxa_entrega, desconto, cupom_usado, custo_real) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14, $15, $16)`, 
-            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itensParsed), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario, taxa_entrega || 0, desconto || 0, cupom_usado || null, custoRealTotal]
+            `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, numero_diario, data_diaria, taxa_entrega, desconto, cupom_usado, custo_real, pagamentos_detalhes) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14, $15, $16, $17)`, 
+            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itensParsed), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario, taxa_entrega || 0, desconto || 0, cupom_usado || null, custoRealTotal, pagamentos_detalhes ? JSON.stringify(pagamentos_detalhes) : null]
         );
 
         // 🥣 BAIXA DO ESTOQUE DE MATÉRIAS-PRIMAS DA FICHA TÉCNICA
@@ -835,21 +837,28 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
 
         // 2. Busca todas as vendas finalizadas durante o turno deste caixa
         const vendasQuery = await pool.query(`
-            SELECT forma_pagamento, SUM(valor_total) as total
+            SELECT forma_pagamento, valor_total, pagamentos_detalhes
             FROM vendas
             WHERE data_hora >= $1 AND data_hora <= $2 AND status NOT ILIKE '%cancelad%'
-            GROUP BY forma_pagamento
         `, [caixa.data_abertura, caixa.data_fechamento]);
 
         let totalDinheiro = 0;
         let totalDigital = 0;
 
         vendasQuery.rows.forEach(v => {
-            const valor = parseFloat(v.total);
-            if (v.forma_pagamento.toLowerCase().includes('dinheiro')) {
-                totalDinheiro += valor;
+            if (v.pagamentos_detalhes) {
+                // Lê o DNA exato dos pagamentos divididos
+                const pd = typeof v.pagamentos_detalhes === 'string' ? JSON.parse(v.pagamentos_detalhes) : v.pagamentos_detalhes;
+                totalDinheiro += parseFloat(pd.dinheiro || 0);
+                totalDigital += parseFloat(pd.pix || 0) + parseFloat(pd.cartao || 0) + parseFloat(pd.outros || 0);
             } else {
-                totalDigital += valor;
+                // Sistema antigo (Retrocompatibilidade)
+                const valor = parseFloat(v.valor_total);
+                if (v.forma_pagamento && v.forma_pagamento.toLowerCase().includes('dinheiro')) {
+                    totalDinheiro += valor;
+                } else {
+                    totalDigital += valor;
+                }
             }
         });
 
@@ -942,7 +951,19 @@ app.get('/api/caixa/resumo/:id', async (req, res) => {
     try {
         const caixa = (await pool.query('SELECT * FROM controle_caixa WHERE id = $1', [req.params.id])).rows[0];
         if (!caixa) return res.status(404).json({ erro: "Não encontrado" });
-        const vendasDinheiro = parseFloat((await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total_vendas FROM vendas WHERE forma_pagamento ILIKE '%dinheiro%' AND status NOT ILIKE '%cancelad%' AND data_hora >= $1`, [caixa.data_abertura])).rows[0].total_vendas) || 0;
+        
+        // 🧠 A MÁGICA DO RESUMO: Lê o pagamento dividido sem inflar os valores
+        const vendasQuery = await pool.query(`SELECT forma_pagamento, valor_total, pagamentos_detalhes FROM vendas WHERE status NOT ILIKE '%cancelad%' AND data_hora >= $1`, [caixa.data_abertura]);
+        let vendasDinheiro = 0;
+        vendasQuery.rows.forEach(v => {
+            if (v.pagamentos_detalhes) {
+                const pd = typeof v.pagamentos_detalhes === 'string' ? JSON.parse(v.pagamentos_detalhes) : v.pagamentos_detalhes;
+                vendasDinheiro += parseFloat(pd.dinheiro || 0);
+            } else if (v.forma_pagamento && v.forma_pagamento.toLowerCase().includes('dinheiro')) {
+                vendasDinheiro += parseFloat(v.valor_total);
+            }
+        });
+
         const movs = (await pool.query(`SELECT tipo, COALESCE(SUM(valor), 0) as total FROM movimentacoes_caixa WHERE caixa_id = $1 GROUP BY tipo`, [req.params.id])).rows;
         let suprimentos = 0, sangrias = 0;
         movs.forEach(r => { if (r.tipo === 'Suprimento') suprimentos = parseFloat(r.total); if (r.tipo === 'Sangria') sangrias = parseFloat(r.total); });
@@ -956,9 +977,24 @@ app.get('/api/caixa/historico', async (req, res) => {
     const caixas = (await pool.query(`SELECT * FROM controle_caixa WHERE status = 'Fechado' AND TO_CHAR(data_fechamento AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM') = $1 ORDER BY data_fechamento DESC`, [req.query.mes])).rows;
     let historico = [];
     for (let c of caixas) {
-        const vendasDinheiro = parseFloat((await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE forma_pagamento ILIKE '%dinheiro%' AND data_hora >= $1 AND data_hora <= $2`, [c.data_abertura, c.data_fechamento])).rows[0].total) || 0;
-        const vendasCartao = parseFloat((await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE (forma_pagamento ILIKE '%cartão%' OR forma_pagamento ILIKE '%cartao%') AND data_hora >= $1 AND data_hora <= $2`, [c.data_abertura, c.data_fechamento])).rows[0].total) || 0;
-        const vendasPix = parseFloat((await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE forma_pagamento ILIKE '%pix%' AND data_hora >= $1 AND data_hora <= $2`, [c.data_abertura, c.data_fechamento])).rows[0].total) || 0;
+        // 🧠 A MÁGICA DO HISTÓRICO: Destrincha os pagamentos divididos
+        const vendasFeitas = (await pool.query(`SELECT forma_pagamento, valor_total, pagamentos_detalhes FROM vendas WHERE status NOT ILIKE '%cancelad%' AND data_hora >= $1 AND data_hora <= $2`, [c.data_abertura, c.data_fechamento])).rows;
+        
+        let vendasDinheiro = 0, vendasCartao = 0, vendasPix = 0;
+        vendasFeitas.forEach(v => {
+            if (v.pagamentos_detalhes) {
+                const pd = typeof v.pagamentos_detalhes === 'string' ? JSON.parse(v.pagamentos_detalhes) : v.pagamentos_detalhes;
+                vendasDinheiro += parseFloat(pd.dinheiro || 0);
+                vendasCartao += parseFloat(pd.cartao || 0);
+                vendasPix += parseFloat(pd.pix || 0);
+            } else if (v.forma_pagamento) {
+                const fp = v.forma_pagamento.toLowerCase();
+                if (fp.includes('dinheiro')) vendasDinheiro += parseFloat(v.valor_total);
+                else if (fp.includes('cartão') || fp.includes('cartao')) vendasCartao += parseFloat(v.valor_total);
+                else if (fp.includes('pix')) vendasPix += parseFloat(v.valor_total);
+            }
+        });
+        
         const despesas = parseFloat((await pool.query(`SELECT COALESCE(SUM(valor), 0) as total FROM movimentacoes_caixa WHERE caixa_id = $1 AND LOWER(TRIM(tipo)) = 'sangria'`, [c.id])).rows[0].total) || 0;
         
         // 2. O PULO DO GATO: Forçamos a formatação em texto usando o fuso horário oficial de São Paulo / Brasília
