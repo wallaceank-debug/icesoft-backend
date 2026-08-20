@@ -1392,7 +1392,8 @@ app.post('/api/pagamento/pix', async (req, res) => {
         const mpToken = (await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'")).rows[0]?.valor;
         if (!mpToken) return res.status(400).json({ erro: "Mercado Pago não configurado." });
 
-        const valorFinal = Number(req.body.valor);
+        // 🛡️ VACINA DA DÍZIMA: Força o número a ter apenas 2 casas decimais antes de mandar pro banco
+        const valorFinal = Number(Number(req.body.valor).toFixed(2));
         if (valorFinal <= 0) return res.status(400).json({ erro: "Valor inválido para Pix." });
 
         // 🛡️ Prevenção 1: Sanitização do Nome (Remove emojis e caracteres estranhos)
