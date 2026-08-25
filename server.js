@@ -177,6 +177,15 @@ pool.connect()
                 campanha TEXT, 
                 data_envio TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            
+            -- 👇 NOVO: Tabela do Clube Icesoft (Fidelidade)
+            CREATE TABLE IF NOT EXISTS clientes (
+                telefone VARCHAR(20) PRIMARY KEY,
+                nome VARCHAR(100),
+                pontos_acumulados INTEGER DEFAULT 0,
+                ultimo_pedido TIMESTAMP,
+                data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         `);
     })
     .then(async () => {
@@ -220,6 +229,10 @@ pool.connect()
         await pool.query("ALTER TABLE vendas ALTER COLUMN forma_pagamento TYPE TEXT");
         // 💰 NOVO: Coluna inteligente para registrar valores exatos em pagamentos divididos
         await pool.query("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS pagamentos_detalhes JSONB DEFAULT NULL");
+        // 👇 NOVO: Colunas do Clube Icesoft nos Produtos
+        await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS pontos_ganhos INTEGER DEFAULT 0");
+        await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS pontos_resgate INTEGER DEFAULT 0");
+        await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS resgate_dinheiro DECIMAL(10,2) DEFAULT 0.00");
 
         // 🛠️ AUTO-CURA AMPLIADA: Sincroniza os contadores de IDs para todas as tabelas de alto fluxo
         try {
@@ -1174,8 +1187,57 @@ app.put('/api/insumos/:id/abastecer', async (req, res) => {
 
 app.get('/api/produtos', async (req, res) => { try { res.json((await pool.query('SELECT * FROM produtos ORDER BY ordem ASC, id ASC')).rows.map(p => ({...p, preco: parseFloat(p.preco)}))); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/produtos/ordem', async (req, res) => { try { for (let p of req.body) { await pool.query('UPDATE produtos SET ordem = $1 WHERE id = $2', [p.ordem, p.id]); } res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro: "Erro"}); } });
-app.post('/api/produtos', async (req, res) => { try { res.json({ sucesso: true, produto: (await pool.query('INSERT INTO produtos (nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, tag, tipo_promocao, valor_promocao, promo_dias, promo_inicio, promo_fim, promo_pdv, categorias_adicionais, controlar_estoque, mostrar_estoque, custo, insumos_json, limites_grupos) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING *', [req.body.nome, req.body.descricao, req.body.preco, req.body.emoji, req.body.categoria || 'Outros', req.body.grupos_ids || [], req.body.imagem_url, req.body.venda_por_peso || false, req.body.tag || '', req.body.tipo_promocao || 'nenhuma', req.body.valor_promocao || 0, req.body.promo_dias || '', req.body.promo_inicio || '', req.body.promo_fim || '', req.body.promo_pdv || false, JSON.stringify(req.body.categorias_adicionais || []), req.body.controlar_estoque || false, req.body.mostrar_estoque || false, req.body.custo || 0, req.body.insumos_json || '[]', JSON.stringify(req.body.limites_grupos || {})])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
-app.put('/api/produtos/:id', async (req, res) => { try { res.json({ sucesso: true, produto: (await pool.query('UPDATE produtos SET nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, imagem_url = $7, venda_por_peso = $8, tag = $9, tipo_promocao = $10, valor_promocao = $11, promo_dias = $12, promo_inicio = $13, promo_fim = $14, promo_pdv = $15, categorias_adicionais = $16, controlar_estoque = $17, mostrar_estoque = $18, custo = $19, insumos_json = $20, limites_grupos = $21 WHERE id = $22 RETURNING *', [req.body.nome, req.body.descricao, req.body.preco, req.body.emoji, req.body.categoria || 'Outros', req.body.grupos_ids || [], req.body.imagem_url, req.body.venda_por_peso || false, req.body.tag || '', req.body.tipo_promocao || 'nenhuma', req.body.valor_promocao || 0, req.body.promo_dias || '', req.body.promo_inicio || '', req.body.promo_fim || '', req.body.promo_pdv || false, JSON.stringify(req.body.categorias_adicionais || []), req.body.controlar_estoque || false, req.body.mostrar_estoque || false, req.body.custo || 0, req.body.insumos_json || '[]', JSON.stringify(req.body.limites_grupos || {}), req.params.id])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
+app.post('/api/produtos', async (req, res) => { 
+    try { 
+        const p = req.body;
+        const result = await pool.query(`
+            INSERT INTO produtos (
+                nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, 
+                tag, tipo_promocao, valor_promocao, promo_dias, promo_inicio, promo_fim, promo_pdv, 
+                categorias_adicionais, controlar_estoque, mostrar_estoque, custo, insumos_json, 
+                limites_grupos, pontos_ganhos, pontos_resgate, resgate_dinheiro
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24) RETURNING *`, 
+            [
+                p.nome, p.descricao, p.preco, p.emoji, p.categoria || 'Outros', p.grupos_ids || [], p.imagem_url, 
+                p.venda_por_peso || false, p.tag || '', p.tipo_promocao || 'nenhuma', p.valor_promocao || 0, 
+                p.promo_dias || '', p.promo_inicio || '', p.promo_fim || '', p.promo_pdv || false, 
+                JSON.stringify(p.categorias_adicionais || []), p.controlar_estoque || false, p.mostrar_estoque || false, 
+                p.custo || 0, p.insumos_json || '[]', JSON.stringify(p.limites_grupos || {}),
+                p.pontos_ganhos || 0, p.pontos_resgate || 0, p.resgate_dinheiro || 0
+            ]);
+        res.json({ sucesso: true, produto: result.rows[0] }); 
+    } catch (e) { 
+        console.error("Erro ao criar produto:", e);
+        res.status(500).json({erro:"Erro ao criar produto"}); 
+    } 
+});
+
+app.put('/api/produtos/:id', async (req, res) => { 
+    try { 
+        const p = req.body;
+        const result = await pool.query(`
+            UPDATE produtos SET 
+                nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, 
+                imagem_url = $7, venda_por_peso = $8, tag = $9, tipo_promocao = $10, valor_promocao = $11, 
+                promo_dias = $12, promo_inicio = $13, promo_fim = $14, promo_pdv = $15, categorias_adicionais = $16, 
+                controlar_estoque = $17, mostrar_estoque = $18, custo = $19, insumos_json = $20, 
+                limites_grupos = $21, pontos_ganhos = $22, pontos_resgate = $23, resgate_dinheiro = $24
+            WHERE id = $25 RETURNING *`, 
+            [
+                p.nome, p.descricao, p.preco, p.emoji, p.categoria || 'Outros', p.grupos_ids || [], p.imagem_url, 
+                p.venda_por_peso || false, p.tag || '', p.tipo_promocao || 'nenhuma', p.valor_promocao || 0, 
+                p.promo_dias || '', p.promo_inicio || '', p.promo_fim || '', p.promo_pdv || false, 
+                JSON.stringify(p.categorias_adicionais || []), p.controlar_estoque || false, p.mostrar_estoque || false, 
+                p.custo || 0, p.insumos_json || '[]', JSON.stringify(p.limites_grupos || {}),
+                p.pontos_ganhos || 0, p.pontos_resgate || 0, p.resgate_dinheiro || 0,
+                req.params.id
+            ]);
+        res.json({ sucesso: true, produto: result.rows[0] }); 
+    } catch (e) { 
+        console.error("Erro ao atualizar produto:", e);
+        res.status(500).json({erro:"Erro ao atualizar produto"}); 
+    } 
+});
 app.delete('/api/produtos/:id', async (req, res) => { try { await pool.query('DELETE FROM produtos WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/produtos/:id/status', async (req, res) => { try { await pool.query('UPDATE produtos SET ativo = $1 WHERE id = $2', [req.body.ativo, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.get('/api/grupos', async (req, res) => { try { res.json((await pool.query('SELECT * FROM grupos_adicionais ORDER BY id DESC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
