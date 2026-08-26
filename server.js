@@ -388,6 +388,38 @@ app.get('/api/vendas/cliente/:telefone', async (req, res) => {
     }
 });
 
+// ==========================================
+// 🎁 ROTAS DO CLUBE ICESOFT (FIDELIDADE / PONTOS)
+// ==========================================
+app.post('/api/clientes/login', async (req, res) => {
+    try {
+        const { telefone, nome } = req.body;
+        if (!telefone) return res.status(400).json({ erro: "Telefone obrigatório." });
+
+        // Procura se o cliente já tem cadastro no Clube
+        let cliente = (await pool.query('SELECT * FROM clientes WHERE telefone = $1', [telefone])).rows[0];
+        
+        if (!cliente) {
+            // Se não tem, cria a ficha dele com 0 pontos
+            cliente = (await pool.query(
+                'INSERT INTO clientes (telefone, nome) VALUES ($1, $2) RETURNING *', 
+                [telefone, nome || 'Cliente']
+            )).rows[0];
+        } else if (nome && cliente.nome !== nome && nome !== 'Cliente') {
+            // Se ele já existe mas atualizou o nome na tela, atualizamos no banco
+            cliente = (await pool.query(
+                'UPDATE clientes SET nome = $1 WHERE telefone = $2 RETURNING *', 
+                [nome, telefone]
+            )).rows[0];
+        }
+        
+        res.json({ sucesso: true, cliente });
+    } catch (e) {
+        console.error("Erro no login do cliente (Clube Icesoft):", e);
+        res.status(500).json({ erro: "Erro interno no servidor." });
+    }
+});
+
 app.post('/api/vendas', async (req, res) => { 
     try { 
         // 👇 AQUI ENSINAMOS O SERVIDOR A OUVIR taxa_entrega, desconto e cupom_usado
