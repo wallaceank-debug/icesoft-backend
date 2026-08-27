@@ -845,9 +845,32 @@ app.put('/api/usuarios/:id', async (req, res) => {
     } catch (e) { res.status(500).json({ erro: "Erro" }); }
 });
 
+// ==========================================
+// 🏆 RANKING DOS MAIS VENDIDOS (VITRINE)
+// ==========================================
 app.get('/api/ranking', async (req, res) => {
-    try { res.json((await pool.query(`SELECT item->>'nome' as nome, COUNT(*) as quantidade FROM vendas, jsonb_array_elements(itens) AS item GROUP BY nome ORDER BY quantidade DESC LIMIT 5`)).rows); } 
-    catch (e) { res.status(500).send("Erro"); }
+    try { 
+        const query = `
+            SELECT 
+                TRIM(SPLIT_PART(REPLACE(COALESCE(item->>'nome', item->>'nomeBase', ''), 'Delivery: ', ''), '(', 1)) as nome, 
+                SUM(COALESCE((item->>'quantidade')::int, 1)) as quantidade 
+            FROM vendas, jsonb_array_elements(
+                CASE 
+                    WHEN jsonb_typeof(itens) = 'string' AND (itens#>>'{}') LIKE '[%' THEN (itens#>>'{}')::jsonb
+                    WHEN jsonb_typeof(itens) = 'array' THEN itens 
+                    ELSE '[]'::jsonb 
+                END
+            ) AS item 
+            WHERE status NOT ILIKE '%cancelad%' 
+            AND COALESCE(item->>'nome', item->>'nomeBase', '') NOT ILIKE '%Taxa de Entrega%'
+            GROUP BY nome 
+            ORDER BY quantidade DESC 
+            LIMIT 10
+        `;
+        res.json((await pool.query(query)).rows); 
+    } catch (e) { 
+        res.status(500).send("Erro"); 
+    }
 });
 
 // ==========================================
