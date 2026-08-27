@@ -430,14 +430,22 @@ app.post('/api/vendas', async (req, res) => {
         const queryDiario = await pool.query("SELECT COALESCE(MAX(numero_diario), 0) + 1 AS proximo FROM vendas WHERE data_diaria = CURRENT_DATE");
         const numeroDiario = queryDiario.rows[0].proximo;
 
-        // 🧠 MOTOR DO CMV: Lendo os insumos do carrinho e somando o custo
+        // 🧠 MOTOR DO CMV E PONTOS DO CLUBE: Lendo carrinho e somando custos e pontos
         let custoRealTotal = 0;
         let mapBaixaInsumos = {};
         let itensParsed = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
         
+        // 👇 NOVO: Variáveis para somar os pontos do pedido
+        let totalPontosGanhos = 0;
+        let totalPontosUsados = 0;
+
         itensParsed.forEach(item => {
             let qtdProduto = Number(item.quantidade) || 1;
             custoRealTotal += ((Number(item.custo_unitario) || 0) * qtdProduto);
+            
+            // 👇 NOVO: Soma os pontos daquele item vezes a quantidade
+            totalPontosGanhos += (Number(item.pontosGanhos) || 0) * qtdProduto;
+            totalPontosUsados += (Number(item.pontosUsados) || 0) * qtdProduto;
             
             if (item.insumos && Array.isArray(item.insumos)) {
                 item.insumos.forEach(ins => {
@@ -462,6 +470,19 @@ app.post('/api/vendas', async (req, res) => {
                 await pool.query("UPDATE insumos SET estoque = estoque - $1 WHERE id = $2", [mapBaixaInsumos[id_insumo], id_insumo]);
             }
         } catch (erroInsumos) { console.error("❌ Erro ao baixar insumos:", erroInsumos); }
+
+        // 👇 NOVO: ATUALIZA O SALDO DO CLUBE ICESOFT NO BANCO
+        if (cliente_telefone && cliente_telefone.trim() !== '' && (totalPontosGanhos > 0 || totalPontosUsados > 0)) {
+            try {
+                await pool.query(
+                    `INSERT INTO clientes (telefone, nome, pontos_acumulados, ultimo_pedido) 
+                     VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
+                     ON CONFLICT (telefone) 
+                     DO UPDATE SET pontos_acumulados = clientes.pontos_acumulados + $4 - $5, ultimo_pedido = CURRENT_TIMESTAMP`,
+                    [cliente_telefone, cliente_nome || 'Cliente', totalPontosGanhos - totalPontosUsados, totalPontosGanhos, totalPontosUsados]
+                );
+            } catch (errPontos) { console.error("Erro ao atualizar pontos do Clube:", errPontos); }
+        }
 
         // 👇 BAIXA AUTOMÁTICA DO CUPOM (Incrementa uso e soma receita gerada)
         if (cupom_usado && desconto > 0) {
