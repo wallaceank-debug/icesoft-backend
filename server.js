@@ -396,21 +396,25 @@ app.post('/api/clientes/login', async (req, res) => {
         const { telefone, nome } = req.body;
         if (!telefone) return res.status(400).json({ erro: "Telefone obrigatório." });
 
-        // Procura se o cliente já tem cadastro no Clube
+        // 1. Procura se o cliente já tem cadastro no Clube
         let cliente = (await pool.query('SELECT * FROM clientes WHERE telefone = $1', [telefone])).rows[0];
         
         if (!cliente) {
-            // Se não tem, cria a ficha dele com 0 pontos
+            // 👇 A MÁGICA DA UNIFICAÇÃO: Se não tem no clube, busca no histórico de vendas antigo!
+            let nomeFinal = nome;
+            if (!nomeFinal || nomeFinal.trim() === '') {
+                const historico = await pool.query("SELECT cliente_nome FROM vendas WHERE cliente_telefone = $1 AND cliente_nome IS NOT NULL AND cliente_nome != '' ORDER BY id DESC LIMIT 1", [telefone]);
+                if (historico.rows.length > 0) nomeFinal = historico.rows[0].cliente_nome;
+                else nomeFinal = 'Cliente VIP';
+            }
+            
             cliente = (await pool.query(
                 'INSERT INTO clientes (telefone, nome) VALUES ($1, $2) RETURNING *', 
-                [telefone, nome || 'Cliente']
+                [telefone, nomeFinal]
             )).rows[0];
-        } else if (nome && cliente.nome !== nome && nome !== 'Cliente') {
-            // Se ele já existe mas atualizou o nome na tela, atualizamos no banco
-            cliente = (await pool.query(
-                'UPDATE clientes SET nome = $1 WHERE telefone = $2 RETURNING *', 
-                [nome, telefone]
-            )).rows[0];
+        } else if (nome && nome.trim() !== '' && cliente.nome !== nome) {
+            // Atualiza só se o cliente fez questão de digitar um nome novo
+            cliente = (await pool.query('UPDATE clientes SET nome = $1 WHERE telefone = $2 RETURNING *', [nome, telefone])).rows[0];
         }
         
         res.json({ sucesso: true, cliente });
