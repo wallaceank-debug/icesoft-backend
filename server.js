@@ -1419,16 +1419,18 @@ app.get('/api/crm/clientes', verificarToken, async (req, res) => {
                 cb.total_pedidos, 
                 cb.total_gasto, 
                 cb.ultima_compra,
-                COALESCE(cp.nome_produto, 'Diversos') AS produto_favorito
+                COALESCE(cp.nome_produto, 'Diversos') AS produto_favorito,
+                COALESCE(cl.pontos_acumulados, 0) AS pontos_clube
             FROM cliente_base cb
             LEFT JOIN contagem_produtos cp ON cb.telefone = cp.telefone AND cp.rank_favorito = 1
+            LEFT JOIN clientes cl ON cb.telefone = cl.telefone
             ORDER BY cb.ultima_compra DESC
         `;
         
         const resultado = await pool.query(queryInteligente);
         res.json(resultado.rows);
     } catch (erro) { 
-        console.error("❌ Erro ao processar produtos favoritos no CRM:", erro);
+        console.error("❌ Erro ao processar dados no CRM:", erro);
         res.status(500).json({ erro: "Erro ao carregar inteligência de clientes." }); 
     }
 });
