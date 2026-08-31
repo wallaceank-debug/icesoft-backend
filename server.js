@@ -205,6 +205,10 @@ pool.connect()
         // 👇 NOVO: Adiciona a coluna de custo para o cálculo do CMV Real
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS custo DECIMAL(10,2) DEFAULT 0.00");
         
+        // 🐛 CORREÇÃO BUG DO GRUPO: Garante que as colunas novas existam no banco de dados antigo sem perder os grupos atuais
+        await pool.query("ALTER TABLE grupos_adicionais ADD COLUMN IF NOT EXISTS ativo BOOLEAN DEFAULT true");
+        await pool.query("ALTER TABLE grupos_adicionais ADD COLUMN IF NOT EXISTS obrigatorio BOOLEAN DEFAULT false");
+        
         // 📦 NOVO: Cria a tabela de Insumos e a coluna da Ficha Técnica nos Produtos
         await pool.query(`
             CREATE TABLE IF NOT EXISTS insumos (
