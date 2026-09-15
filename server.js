@@ -2756,6 +2756,27 @@ app.post('/api/avaliacoes', async (req, res) => {
 });
 
 // ==========================================
+// ⭐ LER AVALIAÇÕES PARA O DASHBOARD
+// ==========================================
+app.get('/api/avaliacoes', verificarToken, async (req, res) => {
+    try {
+        // Busca as notas e cruza com a tabela de vendas para pegar o Nome do Cliente e o Número do Pedido
+        const query = `
+            SELECT a.*, v.cliente_nome, v.numero_diario 
+            FROM avaliacoes a
+            LEFT JOIN vendas v ON a.pedido_id = v.id
+            ORDER BY a.data_hora DESC
+            LIMIT 100
+        `;
+        const resultado = await pool.query(query);
+        res.json(resultado.rows);
+    } catch (e) {
+        console.error("Erro ao buscar avaliações:", e);
+        res.status(500).json({ erro: "Erro ao buscar avaliações" });
+    }
+});
+
+// ==========================================
 // 🧹 MÓDULO FAXINEIRO: CANCELAMENTO AUTOMÁTICO DE PIX FANTASMA
 // ==========================================
 setInterval(async () => {
