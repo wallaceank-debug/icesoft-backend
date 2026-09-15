@@ -186,6 +186,17 @@ pool.connect()
                 ultimo_pedido TIMESTAMP,
                 data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            
+            -- ⭐ NOVA: Tabela de Avaliações (NPS e Qualidade)
+            CREATE TABLE IF NOT EXISTS avaliacoes (
+                id SERIAL PRIMARY KEY,
+                pedido_id INTEGER,
+                telefone VARCHAR(20),
+                nota_cardapio INTEGER,
+                nota_pedido INTEGER,
+                observacao TEXT,
+                data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         `);
     })
     .then(async () => {
@@ -2714,6 +2725,33 @@ app.get('/api/marketing/dashboard', async (req, res) => {
         });
     } catch (e) {
         res.status(500).json({ erro: "Erro ao calcular ROI do marketing" });
+    }
+});
+
+// ==========================================
+// ⭐ RECEPÇÃO DE AVALIAÇÕES PÓS-VENDA
+// ==========================================
+app.post('/api/avaliacoes', async (req, res) => {
+    try {
+        // Desempacota os dados que o cliente mandou do Cardápio
+        const { pedido_id, telefone, nota_cardapio, nota_pedido, observacao } = req.body;
+        
+        // Limpa o telefone para evitar duplicidades no banco
+        const telLimpo = telefone ? String(telefone).replace(/\D/g, '') : null;
+
+        // Salva direto no Banco de Dados
+        await pool.query(
+            `INSERT INTO avaliacoes (pedido_id, telefone, nota_cardapio, nota_pedido, observacao) 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [pedido_id || null, telLimpo, nota_cardapio, nota_pedido, observacao || '']
+        );
+        
+        console.log(`⭐ Nova Avaliação Recebida! Cardápio: ${nota_cardapio} | Pedido: ${nota_pedido}`);
+        res.status(201).json({ sucesso: true });
+        
+    } catch (e) {
+        console.error("❌ Erro ao salvar avaliação no banco:", e);
+        res.status(500).json({ erro: "Erro interno ao salvar avaliação." });
     }
 });
 
