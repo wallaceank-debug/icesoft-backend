@@ -711,13 +711,14 @@ app.put('/api/vendas/:id/status', async (req, res) => {
         // ==========================================
 
         // ==========================================
-        // MENSAGERIA DE WHATSAPP (MANTIDO INTACTO)
+        // MENSAGERIA DE WHATSAPP
         // ==========================================
         if (venda && venda.cliente_telefone && venda.cliente_telefone.trim() !== '') {
+            // 👇 MUDANÇA AQUI: Trazemos todas as mensagens salvas na integração, incluindo a nova 'msg_retirada'
             const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
             const config = configQuery.rows[0];
 
-            // 👇 NOVO: Buscamos o tempo de entrega estipulado na gestão
+            // Buscamos o tempo de entrega estipulado na gestão
             const tempoQuery = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'tempo_entrega'");
             const tempoEstimado = tempoQuery.rows.length > 0 ? tempoQuery.rows[0].valor : '45';
 
@@ -725,6 +726,8 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                 let textoMensagem = null;
                 if (novoStatus === 'A Preparar' && config.msg_aceito) textoMensagem = config.msg_aceito;
                 else if (novoStatus === 'Saiu p/ Entrega' && config.msg_entrega) textoMensagem = config.msg_entrega;
+                // 👇 MUDANÇA AQUI: Ensinamos o robô a pegar a mensagem certa para o novo status!
+                else if (novoStatus === 'Pronto para Retirada' && config.msg_retirada) textoMensagem = config.msg_retirada; 
                 else if (novoStatus === 'Entregue' && config.msg_concluido) textoMensagem = config.msg_concluido;
 
                 if (textoMensagem) {
@@ -1449,11 +1452,13 @@ app.get('/api/crm/clientes', verificarToken, async (req, res) => {
 pool.query(`
     CREATE TABLE IF NOT EXISTS integracoes_config (
         id SERIAL PRIMARY KEY, zap_url TEXT, zap_key TEXT, zap_instancia TEXT,
-        msg_boas_vindas TEXT, msg_recebido TEXT, msg_aceito TEXT, msg_entrega TEXT, msg_concluido TEXT, msg_balcao TEXT
+        msg_boas_vindas TEXT, msg_recebido TEXT, msg_aceito TEXT, msg_entrega TEXT, msg_concluido TEXT, msg_balcao TEXT, msg_retirada TEXT
     );
 `).then(async () => {
     await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS msg_recebido TEXT');
     await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS msg_balcao TEXT');
+    // 👇 MUDANÇA AQUI: Garante que a nova coluna exista mesmo em bancos antigos (Auto-cura)
+    await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS msg_retirada TEXT'); 
     if ((await pool.query('SELECT * FROM integracoes_config')).rowCount === 0) await pool.query('INSERT INTO integracoes_config (zap_instancia) VALUES ($1)', ['IcesoftBot']);
 }).catch(console.error);
 
