@@ -248,6 +248,10 @@ pool.connect()
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS pontos_ganhos INTEGER DEFAULT 0");
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS pontos_resgate INTEGER DEFAULT 0");
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS resgate_dinheiro DECIMAL(10,2) DEFAULT 0.00");
+        
+        // 🍔 NOVO: Colunas para estruturar a Caixa de Combos
+        await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS is_combo BOOLEAN DEFAULT false");
+        await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS combo_itens JSONB DEFAULT '[]'");
 
         // 🛠️ AUTO-CURA AMPLIADA: Sincroniza os contadores de IDs para todas as tabelas de alto fluxo
         try {
@@ -1293,15 +1297,16 @@ app.post('/api/produtos', async (req, res) => {
                 nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, 
                 tag, tipo_promocao, valor_promocao, promo_dias, promo_inicio, promo_fim, promo_pdv, 
                 categorias_adicionais, controlar_estoque, mostrar_estoque, custo, insumos_json, 
-                limites_grupos, pontos_ganhos, pontos_resgate, resgate_dinheiro
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24) RETURNING *`, 
+                limites_grupos, pontos_ganhos, pontos_resgate, resgate_dinheiro, is_combo, combo_itens
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING *`, 
             [
                 p.nome, p.descricao, p.preco, p.emoji, p.categoria || 'Outros', p.grupos_ids || [], p.imagem_url, 
                 p.venda_por_peso || false, p.tag || '', p.tipo_promocao || 'nenhuma', p.valor_promocao || 0, 
                 p.promo_dias || '', p.promo_inicio || '', p.promo_fim || '', p.promo_pdv || false, 
                 JSON.stringify(p.categorias_adicionais || []), p.controlar_estoque || false, p.mostrar_estoque || false, 
                 p.custo || 0, p.insumos_json || '[]', JSON.stringify(p.limites_grupos || {}),
-                p.pontos_ganhos || 0, p.pontos_resgate || 0, p.resgate_dinheiro || 0
+                p.pontos_ganhos || 0, p.pontos_resgate || 0, p.resgate_dinheiro || 0,
+                p.is_combo || false, p.combo_itens || '[]'
             ]);
         res.json({ sucesso: true, produto: result.rows[0] }); 
     } catch (e) { 
@@ -1319,8 +1324,9 @@ app.put('/api/produtos/:id', async (req, res) => {
                 imagem_url = $7, venda_por_peso = $8, tag = $9, tipo_promocao = $10, valor_promocao = $11, 
                 promo_dias = $12, promo_inicio = $13, promo_fim = $14, promo_pdv = $15, categorias_adicionais = $16, 
                 controlar_estoque = $17, mostrar_estoque = $18, custo = $19, insumos_json = $20, 
-                limites_grupos = $21, pontos_ganhos = $22, pontos_resgate = $23, resgate_dinheiro = $24
-            WHERE id = $25 RETURNING *`, 
+                limites_grupos = $21, pontos_ganhos = $22, pontos_resgate = $23, resgate_dinheiro = $24,
+                is_combo = $25, combo_itens = $26
+            WHERE id = $27 RETURNING *`, 
             [
                 p.nome, p.descricao, p.preco, p.emoji, p.categoria || 'Outros', p.grupos_ids || [], p.imagem_url, 
                 p.venda_por_peso || false, p.tag || '', p.tipo_promocao || 'nenhuma', p.valor_promocao || 0, 
@@ -1328,6 +1334,7 @@ app.put('/api/produtos/:id', async (req, res) => {
                 JSON.stringify(p.categorias_adicionais || []), p.controlar_estoque || false, p.mostrar_estoque || false, 
                 p.custo || 0, p.insumos_json || '[]', JSON.stringify(p.limites_grupos || {}),
                 p.pontos_ganhos || 0, p.pontos_resgate || 0, p.resgate_dinheiro || 0,
+                p.is_combo || false, p.combo_itens || '[]',
                 req.params.id
             ]);
         res.json({ sucesso: true, produto: result.rows[0] }); 
