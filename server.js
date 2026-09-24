@@ -497,13 +497,26 @@ app.post('/api/vendas', async (req, res) => {
         // 👇 NOVO: ATUALIZA O SALDO DO CLUBE ICESOFT NO BANCO
         if (cliente_telefone && cliente_telefone.trim() !== '' && (totalPontosGanhos > 0 || totalPontosUsados > 0)) {
             try {
-                await pool.query(
-                    `INSERT INTO clientes (telefone, nome, pontos_acumulados, ultimo_pedido) 
-                     VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
-                     ON CONFLICT (telefone) 
-                     DO UPDATE SET pontos_acumulados = clientes.pontos_acumulados + $4 - $5, ultimo_pedido = CURRENT_TIMESTAMP`,
-                    [cliente_telefone, cliente_nome || 'Cliente', totalPontosGanhos - totalPontosUsados, totalPontosGanhos, totalPontosUsados]
-                );
+                // 🛑 A MÁGICA DA TRAVA DE ACÚMULO
+                // Busca o limite nas configurações
+                const configLimite = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'fidelidade_min_ponto'");
+                const minPonto = configLimite.rows.length > 0 ? Number(configLimite.rows[0].valor) : 0;
+                
+                // Se o pedido (valorFinal) não atingiu o mínimo, ele zera os pontos que ia ganhar
+                if (valorFinal < minPonto) {
+                    totalPontosGanhos = 0;
+                }
+
+                // Só vai pro banco de dados se sobrar algum ponto para mexer (ou se for resgate)
+                if (totalPontosGanhos > 0 || totalPontosUsados > 0) {
+                    await pool.query(
+                        `INSERT INTO clientes (telefone, nome, pontos_acumulados, ultimo_pedido) 
+                         VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
+                         ON CONFLICT (telefone) 
+                         DO UPDATE SET pontos_acumulados = clientes.pontos_acumulados + $4 - $5, ultimo_pedido = CURRENT_TIMESTAMP`,
+                        [cliente_telefone, cliente_nome || 'Cliente', totalPontosGanhos - totalPontosUsados, totalPontosGanhos, totalPontosUsados]
+                    );
+                }
             } catch (errPontos) { console.error("Erro ao atualizar pontos do Clube:", errPontos); }
         }
 
