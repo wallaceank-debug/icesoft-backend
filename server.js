@@ -600,7 +600,11 @@ app.post('/api/vendas', async (req, res) => {
                         try {
                             const countQuery = await pool.query("SELECT COUNT(*) FROM vendas WHERE cliente_telefone = $1 AND status NOT ILIKE '%cancelad%'", [cliente_telefone]);
                             let pontosTotais = parseInt(countQuery.rows[0].count) || 1;
-                            let metaFidelidade = 10;
+                            
+                            // 👇 Lendo a meta de fidelidade em tempo real do banco de dados (CRM)
+                            const configMeta = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'fidelidade_meta'");
+                            let metaFidelidade = configMeta.rows.length > 0 ? parseInt(configMeta.rows[0].valor) : 10;
+                            
                             let pontosAtuais = pontosTotais % metaFidelidade;
                             if (pontosAtuais === 0 && pontosTotais > 0) pontosAtuais = metaFidelidade;
                             let bolinhasVerdes = '🟢'.repeat(pontosAtuais);
@@ -771,7 +775,11 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                         try {
                             const countQuery = await pool.query("SELECT COUNT(*) FROM vendas WHERE cliente_telefone = $1 AND status NOT ILIKE '%cancelad%'", [venda.cliente_telefone]);
                             let pontosTotais = parseInt(countQuery.rows[0].count) || 1;
-                            let metaFidelidade = 10; 
+                            
+                            // 👇 Lendo a meta de fidelidade em tempo real do banco de dados (CRM)
+                            const configMeta = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'fidelidade_meta'");
+                            let metaFidelidade = configMeta.rows.length > 0 ? parseInt(configMeta.rows[0].valor) : 10;
+                            
                             let pontosAtuais = pontosTotais % metaFidelidade; 
                             if (pontosAtuais === 0 && pontosTotais > 0) pontosAtuais = metaFidelidade;
 
