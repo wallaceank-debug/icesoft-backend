@@ -598,21 +598,35 @@ app.post('/api/vendas', async (req, res) => {
                         resumo += `\n*💰 Total:* R$ ${Number(valorFinal).toFixed(2).replace('.', ',')}`;
 
                         try {
-                            const countQuery = await pool.query("SELECT COUNT(*) FROM vendas WHERE cliente_telefone = $1 AND status NOT ILIKE '%cancelad%'", [cliente_telefone]);
-                            let pontosTotais = parseInt(countQuery.rows[0].count) || 1;
-                            
-                            // 👇 Lendo a meta de fidelidade em tempo real do banco de dados (CRM)
-                            const configMeta = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'fidelidade_meta'");
-                            let metaFidelidade = configMeta.rows.length > 0 ? parseInt(configMeta.rows[0].valor) : 10;
+                            // 👇 Lendo a meta e o valor mínimo do banco de dados (CRM)
+                            const configFid = await pool.query("SELECT chave, valor FROM configuracoes WHERE chave IN ('fidelidade_meta', 'fidelidade_min_ponto')");
+                            let metaFidelidade = 10;
+                            let minPonto = 0;
+                            configFid.rows.forEach(r => {
+                                if (r.chave === 'fidelidade_meta') metaFidelidade = parseInt(r.valor) || 10;
+                                if (r.chave === 'fidelidade_min_ponto') minPonto = Number(r.valor) || 0;
+                            });
+
+                            // 👇 O ROBÔ AGORA SÓ CONTA PEDIDOS ACIMA DO VALOR MÍNIMO
+                            const countQuery = await pool.query("SELECT COUNT(*) FROM vendas WHERE cliente_telefone = $1 AND status NOT ILIKE '%cancelad%' AND valor_total >= $2", [cliente_telefone, minPonto]);
+                            let pontosTotais = parseInt(countQuery.rows[0].count) || 0;
                             
                             let pontosAtuais = pontosTotais % metaFidelidade;
                             if (pontosAtuais === 0 && pontosTotais > 0) pontosAtuais = metaFidelidade;
+                            
                             let bolinhasVerdes = '🟢'.repeat(pontosAtuais);
                             let bolinhasVermelhas = '🔴'.repeat(metaFidelidade - pontosAtuais);
-                            resumo += `\n\n🎁 *Seu Progresso de Fidelidade:*\n${bolinhasVerdes}${bolinhasVermelhas}\n`;
-                            if (pontosAtuais === metaFidelidade) {
-                                resumo += `🎉 *Parabéns!* Você completou sua cartela! O seu próximo pedido tem prêmio!`;
+                            
+                            // Avisa o cliente educadamente se a compra não pontuou
+                            if (Number(valorFinal) < minPonto) {
+                                resumo += `\n\n⚠️ *Aviso de Fidelidade:*\nEsta compra não atingiu o mínimo de R$ ${minPonto.toFixed(2).replace('.', ',')} para pontuar.\nSeu progresso continua: ${bolinhasVerdes}${bolinhasVermelhas}\n`;
                             } else {
+                                resumo += `\n\n🎁 *Seu Progresso de Fidelidade:*\n${bolinhasVerdes}${bolinhasVermelhas}\n`;
+                            }
+
+                            if (pontosAtuais === metaFidelidade && pontosTotais > 0 && Number(valorFinal) >= minPonto) {
+                                resumo += `🎉 *Parabéns!* Você completou sua cartela! O seu próximo pedido tem prêmio!`;
+                            } else if (Number(valorFinal) >= minPonto) {
                                 resumo += `Faltam apenas ${metaFidelidade - pontosAtuais} pedidos para o seu prêmio!`;
                             }
                         } catch(erroFid) {}
@@ -773,12 +787,18 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                         if (venda.observacoes && venda.observacoes.trim() !== '') resumo += `\n*📝 Obs:* ${venda.observacoes}`;
 
                         try {
-                            const countQuery = await pool.query("SELECT COUNT(*) FROM vendas WHERE cliente_telefone = $1 AND status NOT ILIKE '%cancelad%'", [venda.cliente_telefone]);
-                            let pontosTotais = parseInt(countQuery.rows[0].count) || 1;
-                            
-                            // 👇 Lendo a meta de fidelidade em tempo real do banco de dados (CRM)
-                            const configMeta = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'fidelidade_meta'");
-                            let metaFidelidade = configMeta.rows.length > 0 ? parseInt(configMeta.rows[0].valor) : 10;
+                            // 👇 Lendo a meta e o valor mínimo do banco de dados (CRM)
+                            const configFid = await pool.query("SELECT chave, valor FROM configuracoes WHERE chave IN ('fidelidade_meta', 'fidelidade_min_ponto')");
+                            let metaFidelidade = 10;
+                            let minPonto = 0;
+                            configFid.rows.forEach(r => {
+                                if (r.chave === 'fidelidade_meta') metaFidelidade = parseInt(r.valor) || 10;
+                                if (r.chave === 'fidelidade_min_ponto') minPonto = Number(r.valor) || 0;
+                            });
+
+                            // 👇 O ROBÔ AGORA SÓ CONTA PEDIDOS ACIMA DO VALOR MÍNIMO
+                            const countQuery = await pool.query("SELECT COUNT(*) FROM vendas WHERE cliente_telefone = $1 AND status NOT ILIKE '%cancelad%' AND valor_total >= $2", [venda.cliente_telefone, minPonto]);
+                            let pontosTotais = parseInt(countQuery.rows[0].count) || 0;
                             
                             let pontosAtuais = pontosTotais % metaFidelidade; 
                             if (pontosAtuais === 0 && pontosTotais > 0) pontosAtuais = metaFidelidade;
@@ -786,11 +806,16 @@ app.put('/api/vendas/:id/status', async (req, res) => {
                             let bolinhasVerdes = '🟢'.repeat(pontosAtuais);
                             let bolinhasVermelhas = '🔴'.repeat(metaFidelidade - pontosAtuais);
 
-                            resumo += `\n\n🎁 *Seu Progresso de Fidelidade:*\n${bolinhasVerdes}${bolinhasVermelhas}\n`;
-                            
-                            if (pontosAtuais === metaFidelidade) {
-                                resumo += `🎉 *Parabéns!* Você completou sua cartela! O seu próximo pedido tem prêmio!`;
+                            // Avisa o cliente educadamente se a compra não pontuou
+                            if (Number(venda.valor_total) < minPonto) {
+                                resumo += `\n\n⚠️ *Aviso de Fidelidade:*\nEsta compra não atingiu o mínimo de R$ ${minPonto.toFixed(2).replace('.', ',')} para pontuar.\nSeu progresso continua: ${bolinhasVerdes}${bolinhasVermelhas}\n`;
                             } else {
+                                resumo += `\n\n🎁 *Seu Progresso de Fidelidade:*\n${bolinhasVerdes}${bolinhasVermelhas}\n`;
+                            }
+                            
+                            if (pontosAtuais === metaFidelidade && pontosTotais > 0 && Number(venda.valor_total) >= minPonto) {
+                                resumo += `🎉 *Parabéns!* Você completou sua cartela! O seu próximo pedido tem prêmio!`;
+                            } else if (Number(venda.valor_total) >= minPonto) {
                                 resumo += `Faltam apenas ${metaFidelidade - pontosAtuais} pedidos para o seu prêmio!`;
                             }
                         } catch(erroFid) {
@@ -1423,16 +1448,21 @@ app.put('/api/configuracoes', async (req, res) => { try { for (let chave of Obje
 
 app.get('/api/crm/clientes', verificarToken, async (req, res) => {
     try {
+        // 👇 Busca a regra do valor mínimo no banco de dados
+        const configMin = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'fidelidade_min_ponto'");
+        const minPonto = configMin.rows.length > 0 ? Number(configMin.rows[0].valor) : 0;
+
         const queryInteligente = `
             WITH cliente_base AS (
                 SELECT 
                     cliente_telefone AS telefone, 
                     MAX(cliente_nome) AS nome, 
                     COUNT(*) AS total_pedidos, 
+                    COUNT(CASE WHEN valor_total >= $1 THEN 1 END) AS pedidos_fidelidade,
                     SUM(valor_total) AS total_gasto, 
                     MAX(data_hora) AS ultima_compra
                 FROM vendas 
-                WHERE cliente_telefone IS NOT NULL AND TRIM(cliente_telefone) != '' AND status != 'Cancelada' AND status != 'Cancelado'
+                WHERE cliente_telefone IS NOT NULL AND TRIM(cliente_telefone) != '' AND status NOT ILIKE '%cancelad%'
                 GROUP BY cliente_telefone
             ),
             contagem_produtos AS (
@@ -1452,13 +1482,14 @@ app.get('/api/crm/clientes', verificarToken, async (req, res) => {
                         ELSE '[]'::jsonb 
                     END
                 ) AS item
-                WHERE v.cliente_telefone IS NOT NULL AND TRIM(v.cliente_telefone) != '' AND v.status != 'Cancelada' AND v.status != 'Cancelado'
+                WHERE v.cliente_telefone IS NOT NULL AND TRIM(v.cliente_telefone) != '' AND v.status NOT ILIKE '%cancelad%'
                 GROUP BY v.cliente_telefone, TRIM(SPLIT_PART(REPLACE(COALESCE(item->>'nome', item->>'produto_nome', item->>'nomeBase', 'Diversos'), 'Delivery: ', ''), '(', 1))
             )
             SELECT 
                 cb.telefone, 
                 cb.nome, 
                 cb.total_pedidos, 
+                cb.pedidos_fidelidade,
                 cb.total_gasto, 
                 cb.ultima_compra,
                 COALESCE(cp.nome_produto, 'Diversos') AS produto_favorito,
@@ -1469,7 +1500,7 @@ app.get('/api/crm/clientes', verificarToken, async (req, res) => {
             ORDER BY cb.ultima_compra DESC
         `;
         
-        const resultado = await pool.query(queryInteligente);
+        const resultado = await pool.query(queryInteligente, [minPonto]);
         res.json(resultado.rows);
     } catch (erro) { 
         console.error("❌ Erro ao processar dados no CRM:", erro);
