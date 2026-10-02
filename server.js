@@ -502,10 +502,24 @@ app.post('/api/clientes/login', async (req, res) => {
 
 app.post('/api/vendas', async (req, res) => { 
     try { 
-        // 👇 AQUI ENSINAMOS O SERVIDOR A OUVIR taxa_entrega, desconto e cupom_usado
         const { produto_nome, valor_total, total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, taxa_entrega, desconto, cupom_usado, pagamentos_detalhes } = req.body;
-        const valorFinal = valor_total || total || 0;
+        let valorFinal = valor_total || total || 0;
         const origemFinal = origem || 'Balcão';
+        
+        let taxaCalculada = Number(taxa_entrega) || 0;
+        let itensParsed = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
+        
+        // 🚀 PROMOÇÃO: Frete Grátis Porto Real
+        if (cliente_endereco && cliente_endereco.toLowerCase().includes('porto real')) {
+            // Descobre o subtotal verdadeiro somando os produtos do carrinho
+            let subtotalReal = itensParsed.reduce((soma, item) => soma + (Number(item.preco) * (Number(item.quantidade) || 1)), 0);
+            
+            if (subtotalReal >= 45.00) {
+                // Se a promoção for ativada, removemos a taxa que o celular tentou cobrar
+                valorFinal = valorFinal - taxaCalculada; 
+                taxaCalculada = 0;
+            }
+        }
         
         const queryDiario = await pool.query("SELECT COALESCE(MAX(numero_diario), 0) + 1 AS proximo FROM vendas WHERE data_diaria = CURRENT_DATE");
         const numeroDiario = queryDiario.rows[0].proximo;
