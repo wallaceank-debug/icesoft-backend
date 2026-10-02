@@ -408,12 +408,66 @@ app.get('/api/vendas/cliente/:telefone', async (req, res) => {
 });
 
 // ==========================================
-// 🎁 ROTAS DO CLUBE ICESOFT (FIDELIDADE / PONTOS)
+// 🎁 ROTAS DO CLUBE ICESOFT (FIDELIDADE / PONTOS E 2FA)
 // ==========================================
+const codigosAutenticacao = new Map(); // 🧠 Memória temporária para os códigos de WhatsApp
+
+app.post('/api/clientes/solicitar-codigo', async (req, res) => {
+    try {
+        const { telefone } = req.body;
+        if (!telefone) return res.status(400).json({ erro: "Telefone obrigatório." });
+
+        const configQuery = await pool.query('SELECT * FROM integracoes_config LIMIT 1');
+        const config = configQuery.rows[0];
+
+        if (!config || !config.zap_url || !config.zap_key || !config.zap_instancia) {
+            return res.status(400).json({ erro: "WhatsApp da loja não está configurado para enviar códigos." });
+        }
+
+        // Gera código de 6 dígitos
+        const codigo = Math.floor(100000 + Math.random() * 900000).toString();
+        
+        // Salva na memória por 10 minutos
+        codigosAutenticacao.set(telefone, { codigo, expira: Date.now() + 10 * 60 * 1000 });
+
+        // Prepara e envia a mensagem
+        const texto = `*Icesoft Sorvetes*\n\n🔒 Seu código de acesso ao Clube Fidelidade é: *${codigo}*\n\n_Válido por 10 minutos. Não compartilhe com ninguém._`;
+        const telefoneLimpo = "55" + telefone.replace(/\D/g, '');
+        const urlZap = config.zap_url.trim().replace(/\/$/, "");
+        const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
+
+        const response = await fetch(`${urlZap}/message/sendText/${instanciaURL}`, {
+            method: 'POST',
+            headers: { 'apikey': config.zap_key.trim(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ number: telefoneLimpo, text: texto })
+        });
+
+        if (!response.ok) throw new Error("Falha na API da Evolution");
+
+        res.json({ sucesso: true });
+    } catch (e) {
+        console.error("Erro ao enviar código 2FA:", e);
+        res.status(500).json({ erro: "Erro ao enviar o código pelo WhatsApp." });
+    }
+});
+
 app.post('/api/clientes/login', async (req, res) => {
     try {
-        const { telefone, nome } = req.body;
+        const { telefone, nome, codigo } = req.body;
         if (!telefone) return res.status(400).json({ erro: "Telefone obrigatório." });
+
+        // 🔐 VERIFICAÇÃO 2FA (Segurança Máxima)
+        if (!codigo) return res.status(400).json({ erro: "Código de segurança obrigatório." });
+        
+        const dadosAuth = codigosAutenticacao.get(telefone);
+        if (!dadosAuth) return res.status(400).json({ erro: "Nenhum código solicitado ou código expirado." });
+        if (dadosAuth.expira < Date.now()) {
+            codigosAutenticacao.delete(telefone);
+            return res.status(400).json({ erro: "Código expirado. Solicite novamente no cardápio." });
+        }
+        if (dadosAuth.codigo !== codigo.trim()) {
+            return res.status(400).json({ erro: "Código inválido. Verifique o número enviado no WhatsApp." });
+        }
 
         // 1. Procura se o cliente já tem cadastro no Clube
         let cliente = (await pool.query('SELECT * FROM clientes WHERE telefone = $1', [telefone])).rows[0];
@@ -436,6 +490,9 @@ app.post('/api/clientes/login', async (req, res) => {
             cliente = (await pool.query('UPDATE clientes SET nome = $1 WHERE telefone = $2 RETURNING *', [nome, telefone])).rows[0];
         }
         
+        // (Opcional) Podemos deletar o código após o sucesso, mas mantemos para a segunda chamada (quando pede o nome do VIP) não quebrar.
+        // codigosAutenticacao.delete(telefone); 
+
         res.json({ sucesso: true, cliente });
     } catch (e) {
         console.error("Erro no login do cliente (Clube Icesoft):", e);
