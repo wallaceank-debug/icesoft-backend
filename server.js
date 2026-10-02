@@ -511,25 +511,21 @@ app.post('/api/vendas', async (req, res) => {
         
         // 🚀 PROMOÇÃO: Frete Grátis Porto Real
         if (cliente_endereco && cliente_endereco.toLowerCase().includes('porto real')) {
-            // Descobre o subtotal verdadeiro somando os produtos do carrinho
             let subtotalReal = itensParsed.reduce((soma, item) => soma + (Number(item.preco) * (Number(item.quantidade) || 1)), 0);
             
             if (subtotalReal >= 45.00) {
-                // Se a promoção for ativada, removemos a taxa que o celular tentou cobrar
                 valorFinal = valorFinal - taxaCalculada; 
-                taxaCalculada = 0;
+                taxaCalculada = 0; // Garante que o banco registre a taxa zerada
             }
         }
         
         const queryDiario = await pool.query("SELECT COALESCE(MAX(numero_diario), 0) + 1 AS proximo FROM vendas WHERE data_diaria = CURRENT_DATE");
         const numeroDiario = queryDiario.rows[0].proximo;
 
-        // 🧠 MOTOR DO CMV E PONTOS DO CLUBE: Lendo carrinho e somando custos e pontos
+        // 🧠 MOTOR DO CMV E PONTOS DO CLUBE
         let custoRealTotal = 0;
         let mapBaixaInsumos = {};
-        let itensParsed = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
         
-        // 👇 NOVO: Variáveis para somar os pontos do pedido
         let totalPontosGanhos = 0;
         let totalPontosUsados = 0;
 
@@ -537,7 +533,6 @@ app.post('/api/vendas', async (req, res) => {
             let qtdProduto = Number(item.quantidade) || 1;
             custoRealTotal += ((Number(item.custo_unitario) || 0) * qtdProduto);
             
-            // 👇 NOVO: Soma os pontos daquele item vezes a quantidade
             totalPontosGanhos += (Number(item.pontosGanhos) || 0) * qtdProduto;
             totalPontosUsados += (Number(item.pontosUsados) || 0) * qtdProduto;
             
@@ -551,11 +546,11 @@ app.post('/api/vendas', async (req, res) => {
             }
         });
 
-        // 👇 AQUI ENSINAMOS O BANCO A GUARDAR A VENDA COM O CUSTO REAL E OS PAGAMENTOS DIVIDIDOS
+        // 👇 AQUI ENSINAMOS O BANCO A GUARDAR A VENDA (Usando taxaCalculada)
         await pool.query(
             `INSERT INTO vendas (produto_nome, valor_total, forma_pagamento, itens, status, cliente_nome, cliente_telefone, cliente_endereco, origem, observacoes, transacao_id, numero_diario, data_diaria, taxa_entrega, desconto, cupom_usado, custo_real, pagamentos_detalhes) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_DATE, $13, $14, $15, $16, $17)`, 
-            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itensParsed), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario, taxa_entrega || 0, desconto || 0, cupom_usado || null, custoRealTotal, pagamentos_detalhes ? JSON.stringify(pagamentos_detalhes) : null]
+            [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itensParsed), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario, taxaCalculada, desconto || 0, cupom_usado || null, custoRealTotal, pagamentos_detalhes ? JSON.stringify(pagamentos_detalhes) : null]
         );
 
         // 🥣 BAIXA DO ESTOQUE DE MATÉRIAS-PRIMAS DA FICHA TÉCNICA
@@ -659,8 +654,9 @@ app.post('/api/vendas', async (req, res) => {
 
                         let resumo = `\n\n*🛒 Resumo da Compra:*\n`;
                         try {
-                            const itensParsed = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
-                            itensParsed.forEach(item => { 
+                            // Correção: Nome alterado para itensParaResumo para evitar conflito com a variável principal
+                            const itensParaResumo = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
+                            itensParaResumo.forEach(item => { 
                                 const qtd = item.quantidade || 1;
                                 const precoLinha = Number(item.preco) * qtd; // Mostra o valor total daquela linha
                                 resumo += `▪️ ${qtd}x ${item.nome.replace('Delivery: ', '')} - R$ ${precoLinha.toFixed(2).replace('.', ',')}\n`; 
