@@ -907,6 +907,73 @@ app.put('/api/vendas/:id/status', async (req, res) => {
 });
 
 // ==========================================
+// ♻️ RESTAURAR PEDIDO CANCELADO (VOLTA PARA O KANBAN)
+// ==========================================
+app.put('/api/vendas/:id/restaurar', async (req, res) => {
+    try {
+        const idVenda = req.params.id;
+        const venda = (await pool.query("SELECT * FROM vendas WHERE id = $1", [idVenda])).rows[0];
+
+        if (!venda) return res.status(404).json({ erro: "Pedido não encontrado" });
+
+        // 1. Volta o status para a fila da cozinha
+        await pool.query("UPDATE vendas SET status = 'A Preparar' WHERE id = $1", [idVenda]);
+
+        // 2. Baixa o estoque novamente (já que o robô faxineiro havia devolvido)
+        try {
+            let itensComprados = typeof venda.itens === 'string' ? JSON.parse(venda.itens) : (venda.itens || []);
+            let mapBaixaInsumos = {};
+
+            itensComprados.forEach(item => {
+                let qtdProduto = Number(item.quantidade) || 1;
+                if (item.insumos && Array.isArray(item.insumos)) {
+                    item.insumos.forEach(ins => {
+                        if (ins.id_insumo) {
+                            if (!mapBaixaInsumos[ins.id_insumo]) mapBaixaInsumos[ins.id_insumo] = 0;
+                            mapBaixaInsumos[ins.id_insumo] += (Number(ins.qtd) * qtdProduto);
+                        }
+                    });
+                }
+            });
+
+            for (let id_insumo in mapBaixaInsumos) {
+                await pool.query("UPDATE insumos SET estoque = estoque - $1 WHERE id = $2", [mapBaixaInsumos[id_insumo], id_insumo]);
+            }
+
+            const queryEstoque = await pool.query("SELECT id, nome, estoque, ativo FROM produtos");
+            let produtosNoBanco = queryEstoque.rows;
+
+            for (let item of itensComprados) {
+                let qtd = item.quantidade ? Number(item.quantidade) : 1;
+                let nomeBusca = (item.nome || item.produto_nome || item.nomeBase || "").replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+                
+                if (nomeBusca) {
+                    let p = produtosNoBanco.find(prod => prod.nome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().includes(nomeBusca));
+                    if (p && p.estoque !== null && p.estoque > 0) {
+                        let novoEstoque = Number(p.estoque) - qtd;
+                        let continuaAtivo = p.ativo;
+                        if (novoEstoque <= 0) { novoEstoque = 0; continuaAtivo = false; }
+                        await pool.query("UPDATE produtos SET estoque = $1, ativo = $2 WHERE id = $3", [novoEstoque, continuaAtivo, p.id]);
+                    }
+                }
+            }
+        } catch(errEstoque) { console.error("Erro ao abater estoque na restauração:", errEstoque); }
+
+        // 3. Grita no rádio para o Kanban e telas atualizarem
+        io.emit('novo_pedido_kanban', {
+            id: venda.numero_diario || venda.id,
+            cliente: venda.cliente_nome,
+            status: 'A Preparar'
+        });
+
+        res.json({ sucesso: true });
+    } catch (e) {
+        console.error("Erro ao restaurar pedido:", e);
+        res.status(500).json({ erro: "Erro ao restaurar" });
+    }
+});
+
+// ==========================================
 // 💳 CORRIGIR FORMA DE PAGAMENTO (AUDITORIA INTELIGENTE)
 // ==========================================
 app.put('/api/vendas/:id/pagamento', async (req, res) => {
