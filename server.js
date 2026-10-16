@@ -611,25 +611,68 @@ app.post('/api/vendas', async (req, res) => {
 
         try {
           let itensComprados = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
-          const queryEstoque = await pool.query("SELECT id, nome, estoque, ativo FROM produtos");
+          const queryEstoque = await pool.query("SELECT id, nome, estoque, ativo, controlar_estoque, is_combo, combo_itens FROM produtos");
           let produtosNoBanco = queryEstoque.rows.sort((a, b) => b.nome.length - a.nome.length);
+
+          const limparNomeEstoque = (txt) => (txt || "")
+              .replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '')
+              .replace(/^(delivery:|balcao:|balcão:|🔥 oferta:|🎁 \[resgate\])\s*/gi, '')
+              .toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+
+          // Agrupa todas as quantidades compradas por ID do produto antes de abater no banco
+          let mapBaixaProdutos = {};
 
           for (let item of itensComprados) {
             let qtd = item.quantidade ? Number(item.quantidade) : 1;
             let nomeRaw = item.nome || item.produto_nome || item.nomeBase || "";
-            if (typeof nomeRaw === 'string' && nomeRaw.trim() !== "") {
-              let nomeBusca = nomeRaw.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-              let p = produtosNoBanco.find(prod => {
-                  let nomeBD = prod.nome.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-                  return nomeBusca.includes(nomeBD);
-              });
-              if (p && p.estoque !== null && p.estoque > 0) {
-                  let novoEstoque = Number(p.estoque) - qtd;
-                  let continuaAtivo = p.ativo;
-                  if (novoEstoque <= 0) { novoEstoque = 0; continuaAtivo = false; }
-                  await pool.query("UPDATE produtos SET estoque = $1, ativo = $2 WHERE id = $3", [novoEstoque, continuaAtivo, p.id]);
-              }
+            
+            let p = null;
+            if (item.produtoId) {
+                p = produtosNoBanco.find(prod => Number(prod.id) === Number(item.produtoId));
             }
+            if (!p && typeof nomeRaw === 'string' && nomeRaw.trim() !== "") {
+                // Compara primeiro o nome base (antes dos parênteses de adicionais) para não confundir adicional com produto
+                let nomeBaseLimpo = limparNomeEstoque(nomeRaw.split('(')[0]);
+                p = produtosNoBanco.find(prod => limparNomeEstoque(prod.nome) === nomeBaseLimpo);
+                
+                if (!p) {
+                    let nomeBuscaCompleto = limparNomeEstoque(nomeRaw);
+                    p = produtosNoBanco.find(prod => nomeBuscaCompleto.includes(limparNomeEstoque(prod.nome)));
+                }
+            }
+
+            if (p) {
+                // 1. Se for um Combo, abre a caixa e abate o estoque de cada produto filho participante
+                if (p.is_combo && p.combo_itens) {
+                    let filhosCombo = [];
+                    try { filhosCombo = typeof p.combo_itens === 'string' ? JSON.parse(p.combo_itens) : p.combo_itens; } catch(e) {}
+                    if (Array.isArray(filhosCombo)) {
+                        filhosCombo.forEach(filho => {
+                            if (filho.produto_id) {
+                                let qtdFilho = (Number(filho.quantidade) || 1) * qtd;
+                                mapBaixaProdutos[filho.produto_id] = (mapBaixaProdutos[filho.produto_id] || 0) + qtdFilho;
+                            }
+                        });
+                    }
+                }
+                // 2. Registra a baixa para o próprio produto principal (caso ele tenha controle de estoque)
+                mapBaixaProdutos[p.id] = (mapBaixaProdutos[p.id] || 0) + qtd;
+            }
+          }
+
+          // Executa a baixa consolidada no banco de dados e bloqueia imediatamente se zerar
+          for (let idProd in mapBaixaProdutos) {
+              let prod = produtosNoBanco.find(x => Number(x.id) === Number(idProd));
+              if (prod && (prod.controlar_estoque === true || prod.estoque !== null)) {
+                  let qtdAbater = mapBaixaProdutos[idProd];
+                  let novoEstoque = (Number(prod.estoque) || 0) - qtdAbater;
+                  let continuaAtivo = prod.ativo;
+                  if (novoEstoque <= 0) { 
+                      novoEstoque = 0; 
+                      continuaAtivo = false; // Esgotou: bloqueia para venda na mesma hora
+                  }
+                  await pool.query("UPDATE produtos SET estoque = $1, ativo = $2 WHERE id = $3", [novoEstoque, continuaAtivo, prod.id]);
+              }
           }
         } catch (erroEstoque) { console.error("❌ Erro ao baixar estoque:", erroEstoque); }
 
@@ -1355,7 +1398,21 @@ app.post('/api/imprimir/comanda', async (req, res) => {
 
 app.delete('/api/mesas/:id', async (req, res) => { try { await pool.query('DELETE FROM mesas_ativas WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({ erro: "Erro" }); } });
 
-app.put('/api/produtos/:id/estoque', async (req, res) => { try { await pool.query('UPDATE produtos SET estoque = $1 WHERE id = $2', [req.body.estoque, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro: "Erro"}); } });
+app.put('/api/produtos/:id/estoque', async (req, res) => { 
+    try { 
+        const novoEstoque = Math.max(0, Number(req.body.estoque) || 0);
+        // Se colocou estoque maior que zero, ativa o produto na hora (true). Se zerou, bloqueia (false).
+        const novoStatusAtivo = novoEstoque > 0;
+        
+        await pool.query(
+            'UPDATE produtos SET estoque = $1, ativo = $2, controlar_estoque = true WHERE id = $3', 
+            [novoEstoque, novoStatusAtivo, req.params.id]
+        ); 
+        res.json({ sucesso: true, estoque: novoEstoque, ativo: novoStatusAtivo }); 
+    } catch (e) { 
+        res.status(500).json({erro: "Erro"}); 
+    } 
+});
 app.get('/api/status', (req, res) => res.json({ mensagem: "✅ Motor v5.0 pronto!" }));
 
 // ==========================================
@@ -1811,7 +1868,7 @@ app.post('/api/pagamento/webhook', async (req, res) => {
                 
                 // 🛡️ VACINA ANTI-RECUO: Só atualiza se o pedido não estiver nas colunas avançadas
                 const resultado = await pool.query(
-                    "UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1 AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Entregue', 'Concluída') AND status NOT ILIKE '%cancelad%' RETURNING numero_diario, cliente_nome", 
+                    "UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1 AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Pronto para Retirada', 'Entregue', 'Concluída') AND status NOT ILIKE '%cancelad%' RETURNING numero_diario, cliente_nome", 
                     [pagamentoId.toString()]
                 );
                 
@@ -1839,7 +1896,7 @@ app.get('/api/pagamento/pix/:id/status', async (req, res) => {
             
             // 🛡️ VACINA ANTI-RECUO também na checagem da tela do cliente
             await pool.query(
-                "UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1 AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Entregue', 'Concluída') AND status NOT ILIKE '%cancelad%'", 
+                "UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1 AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Pronto para Retirada', 'Entregue', 'Concluída') AND status NOT ILIKE '%cancelad%'", 
                 [req.params.id.toString()]
             );
             res.json({ pago: true });
@@ -2979,12 +3036,13 @@ app.get('/api/avaliacoes', verificarToken, async (req, res) => {
 // ==========================================
 setInterval(async () => {
     try {
-        // 1. Busca pedidos gerados no PIX há mais de 10 minutos que NÃO foram pagos (ou seja, estão parados)
+        // 1. Busca pedidos gerados no PIX há mais de 10 minutos que NÃO foram pagos (estão travados em Aguardando Pagamento)
         const queryFantasma = `
             SELECT id, itens, numero_diario FROM vendas 
             WHERE forma_pagamento ILIKE '%pix%' 
             AND transacao_id IS NOT NULL 
-            AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Entregue', 'Concluída') 
+            AND status = 'Aguardando Pagamento'
+            AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Pronto para Retirada', 'Entregue', 'Concluída') 
             AND status NOT ILIKE '%cancelad%'
             AND data_hora <= NOW() - INTERVAL '10 minutes'
         `;
