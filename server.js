@@ -400,10 +400,60 @@ app.post('/api/cupons/validar', async (req, res) => {
 // ==========================================
 app.get('/api/vendas/cliente/:telefone', async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM vendas WHERE cliente_telefone = $1 ORDER BY id DESC', [req.params.telefone]);
+        const telLimpo = String(req.params.telefone || '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+        const result = await pool.query(
+            `SELECT * FROM vendas 
+             WHERE regexp_replace(regexp_replace(COALESCE(cliente_telefone, ''), '\\D', '', 'g'), '^55(?=\\d{10,11}$)', '') = $1 
+             ORDER BY id DESC`, 
+            [telLimpo]
+        );
         res.json(result.rows);
     } catch (e) {
         res.status(500).json({ erro: "Erro ao buscar histórico do cliente" });
+    }
+});
+
+// 🔄 ROTA DE SINCRONIZAÇÃO EM TEMPO REAL DOS PONTOS DE TROCA DO CLIENTE
+app.get('/api/clientes/saldo/:telefone', async (req, res) => {
+    try {
+        const telLimpo = String(req.params.telefone || '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+        if (!telLimpo) return res.json({ pontos_acumulados: 0 });
+
+        const queryPontos = `
+            SELECT COALESCE(SUM(
+                CASE 
+                    WHEN COALESCE((item->>'pontosUsados')::int, 0) > 0 OR COALESCE(item->>'nome', '') ILIKE '%[RESGATE]%' 
+                    THEN -1 * COALESCE((item->>'pontosUsados')::int, 0) * COALESCE((item->>'quantidade')::int, 1)
+                    ELSE COALESCE(NULLIF((item->>'pontosGanhos')::int, 0), p.pontos_ganhos, 0) * COALESCE((item->>'quantidade')::int, 1)
+                END
+            ), 0) AS saldo_real
+            FROM vendas v
+            CROSS JOIN LATERAL jsonb_array_elements(
+                CASE 
+                    WHEN jsonb_typeof(v.itens) = 'string' AND (v.itens#>>'{}') LIKE '[%' THEN (v.itens#>>'{}')::jsonb
+                    WHEN jsonb_typeof(v.itens) = 'array' THEN v.itens 
+                    ELSE '[]'::jsonb 
+                END
+            ) AS item
+            LEFT JOIN produtos p ON p.id = CASE WHEN (item->>'produtoId') ~ '^[0-9]+$' THEN (item->>'produtoId')::int ELSE NULL END
+            WHERE regexp_replace(regexp_replace(COALESCE(v.cliente_telefone, ''), '\\D', '', 'g'), '^55(?=\\d{10,11}$)', '') = $1
+              AND v.status NOT ILIKE '%cancelad%'
+              AND v.status != 'Aguardando Pagamento'
+        `;
+        const calc = await pool.query(queryPontos, [telLimpo]);
+        const saldoReal = Math.max(0, parseInt(calc.rows[0]?.saldo_real) || 0);
+
+        // Atualiza a tabela clientes para manter o banco 100% alinhado
+        await pool.query(
+            `UPDATE clientes SET pontos_acumulados = $1 
+             WHERE regexp_replace(regexp_replace(COALESCE(telefone, ''), '\\D', '', 'g'), '^55(?=\\d{10,11}$)', '') = $2`,
+            [saldoReal, telLimpo]
+        );
+
+        res.json({ pontos_acumulados: saldoReal });
+    } catch (e) {
+        console.error("Erro ao sincronizar saldo de pontos:", e);
+        res.status(500).json({ erro: "Erro ao consultar saldo" });
     }
 });
 
@@ -560,29 +610,16 @@ app.post('/api/vendas', async (req, res) => {
             }
         } catch (erroInsumos) { console.error("❌ Erro ao baixar insumos:", erroInsumos); }
 
-        // 👇 NOVO: ATUALIZA O SALDO DO CLUBE ICESOFT NO BANCO
+        // 👇 ATUALIZA O SALDO DE PONTOS DE TROCA (PRODUTOS) NO BANCO SEM A TRAVA DO CARTÃO FIDELIDADE
         if (cliente_telefone && cliente_telefone.trim() !== '' && (totalPontosGanhos > 0 || totalPontosUsados > 0)) {
             try {
-                // 🛑 A MÁGICA DA TRAVA DE ACÚMULO
-                // Busca o limite nas configurações
-                const configLimite = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'fidelidade_min_ponto'");
-                const minPonto = configLimite.rows.length > 0 ? Number(configLimite.rows[0].valor) : 0;
-                
-                // Se o pedido (valorFinal) não atingiu o mínimo, ele zera os pontos que ia ganhar
-                if (valorFinal < minPonto) {
-                    totalPontosGanhos = 0;
-                }
-
-                // Só vai pro banco de dados se sobrar algum ponto para mexer (ou se for resgate)
-                if (totalPontosGanhos > 0 || totalPontosUsados > 0) {
-                    await pool.query(
-                        `INSERT INTO clientes (telefone, nome, pontos_acumulados, ultimo_pedido) 
-                         VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
-                         ON CONFLICT (telefone) 
-                         DO UPDATE SET pontos_acumulados = clientes.pontos_acumulados + $4 - $5, ultimo_pedido = CURRENT_TIMESTAMP`,
-                        [cliente_telefone, cliente_nome || 'Cliente', totalPontosGanhos - totalPontosUsados, totalPontosGanhos, totalPontosUsados]
-                    );
-                }
+                await pool.query(
+                    `INSERT INTO clientes (telefone, nome, pontos_acumulados, ultimo_pedido) 
+                     VALUES ($1, $2, GREATEST(0, $3), CURRENT_TIMESTAMP) 
+                     ON CONFLICT (telefone) 
+                     DO UPDATE SET pontos_acumulados = GREATEST(0, clientes.pontos_acumulados + $4 - $5), ultimo_pedido = CURRENT_TIMESTAMP`,
+                    [cliente_telefone, cliente_nome || 'Cliente', totalPontosGanhos - totalPontosUsados, totalPontosGanhos, totalPontosUsados]
+                );
             } catch (errPontos) { console.error("Erro ao atualizar pontos do Clube:", errPontos); }
         }
 
@@ -1652,28 +1689,40 @@ app.get('/api/crm/clientes', verificarToken, async (req, res) => {
         const minPonto = configMin.rows.length > 0 ? Number(configMin.rows[0].valor) : 0;
 
         const queryInteligente = `
-            WITH cliente_base AS (
+            WITH vendas_limpas AS (
                 SELECT 
-                    cliente_telefone AS telefone, 
+                    v.*,
+                    regexp_replace(regexp_replace(COALESCE(v.cliente_telefone, ''), '\\D', '', 'g'), '^55(?=\\d{10,11}$)', '') AS tel_chave
+                FROM vendas v
+                WHERE v.cliente_telefone IS NOT NULL 
+                  AND TRIM(v.cliente_telefone) != '' 
+                  AND v.status NOT ILIKE '%cancelad%'
+                  AND v.status != 'Aguardando Pagamento'
+            ),
+            cliente_base AS (
+                SELECT 
+                    tel_chave,
+                    MAX(cliente_telefone) AS telefone, 
                     MAX(cliente_nome) AS nome, 
                     COUNT(*) AS total_pedidos, 
                     COUNT(CASE WHEN valor_total >= $1 THEN 1 END) AS pedidos_fidelidade,
+                    COUNT(CASE WHEN observacoes ILIKE '%FIDELIDADE_VIP%' OR cupom_usado = 'FIDELIDADE_VIP' THEN 1 END) AS premios_usados,
                     SUM(valor_total) AS total_gasto, 
                     MAX(data_hora) AS ultima_compra
-                FROM vendas 
-                WHERE cliente_telefone IS NOT NULL AND TRIM(cliente_telefone) != '' AND status NOT ILIKE '%cancelad%'
-                GROUP BY cliente_telefone
+                FROM vendas_limpas 
+                WHERE tel_chave != ''
+                GROUP BY tel_chave
             ),
             contagem_produtos AS (
                 SELECT 
-                    v.cliente_telefone AS telefone,
+                    v.tel_chave,
                     TRIM(SPLIT_PART(REPLACE(COALESCE(item->>'nome', item->>'produto_nome', item->>'nomeBase', 'Diversos'), 'Delivery: ', ''), '(', 1)) AS nome_produto,
                     COUNT(*) AS total_vezes,
                     ROW_NUMBER() OVER (
-                        PARTITION BY v.cliente_telefone 
+                        PARTITION BY v.tel_chave 
                         ORDER BY COUNT(*) DESC, TRIM(SPLIT_PART(REPLACE(COALESCE(item->>'nome', item->>'produto_nome', item->>'nomeBase', 'Diversos'), 'Delivery: ', ''), '(', 1)) ASC
                     ) as rank_favorito
-                FROM vendas v
+                FROM vendas_limpas v
                 CROSS JOIN LATERAL jsonb_array_elements(
                     CASE 
                         WHEN jsonb_typeof(v.itens) = 'string' AND (v.itens#>>'{}') LIKE '[%' THEN (v.itens#>>'{}')::jsonb
@@ -1681,21 +1730,44 @@ app.get('/api/crm/clientes', verificarToken, async (req, res) => {
                         ELSE '[]'::jsonb 
                     END
                 ) AS item
-                WHERE v.cliente_telefone IS NOT NULL AND TRIM(v.cliente_telefone) != '' AND v.status NOT ILIKE '%cancelad%'
-                GROUP BY v.cliente_telefone, TRIM(SPLIT_PART(REPLACE(COALESCE(item->>'nome', item->>'produto_nome', item->>'nomeBase', 'Diversos'), 'Delivery: ', ''), '(', 1))
+                WHERE v.tel_chave != ''
+                GROUP BY v.tel_chave, TRIM(SPLIT_PART(REPLACE(COALESCE(item->>'nome', item->>'produto_nome', item->>'nomeBase', 'Diversos'), 'Delivery: ', ''), '(', 1))
+            ),
+            pontos_reais AS (
+                SELECT 
+                    v.tel_chave,
+                    GREATEST(0, COALESCE(SUM(
+                        CASE 
+                            WHEN COALESCE((item->>'pontosUsados')::int, 0) > 0 OR COALESCE(item->>'nome', '') ILIKE '%[RESGATE]%' 
+                            THEN -1 * COALESCE((item->>'pontosUsados')::int, 0) * COALESCE((item->>'quantidade')::int, 1)
+                            ELSE COALESCE(NULLIF((item->>'pontosGanhos')::int, 0), p.pontos_ganhos, 0) * COALESCE((item->>'quantidade')::int, 1)
+                        END
+                    ), 0)) AS saldo_calculado
+                FROM vendas_limpas v
+                CROSS JOIN LATERAL jsonb_array_elements(
+                    CASE 
+                        WHEN jsonb_typeof(v.itens) = 'string' AND (v.itens#>>'{}') LIKE '[%' THEN (v.itens#>>'{}')::jsonb
+                        WHEN jsonb_typeof(v.itens) = 'array' THEN v.itens 
+                        ELSE '[]'::jsonb 
+                    END
+                ) AS item
+                LEFT JOIN produtos p ON p.id = CASE WHEN (item->>'produtoId') ~ '^[0-9]+$' THEN (item->>'produtoId')::int ELSE NULL END
+                WHERE v.tel_chave != ''
+                GROUP BY v.tel_chave
             )
             SELECT 
                 cb.telefone, 
                 cb.nome, 
                 cb.total_pedidos, 
                 cb.pedidos_fidelidade,
+                cb.premios_usados,
                 cb.total_gasto, 
                 cb.ultima_compra,
                 COALESCE(cp.nome_produto, 'Diversos') AS produto_favorito,
-                COALESCE(cl.pontos_acumulados, 0) AS pontos_clube
+                COALESCE(pr.saldo_calculado, 0) AS pontos_clube
             FROM cliente_base cb
-            LEFT JOIN contagem_produtos cp ON cb.telefone = cp.telefone AND cp.rank_favorito = 1
-            LEFT JOIN clientes cl ON cb.telefone = cl.telefone
+            LEFT JOIN contagem_produtos cp ON cb.tel_chave = cp.tel_chave AND cp.rank_favorito = 1
+            LEFT JOIN pontos_reais pr ON cb.tel_chave = pr.tel_chave
             ORDER BY cb.ultima_compra DESC
         `;
         
