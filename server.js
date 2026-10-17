@@ -778,7 +778,15 @@ app.put('/api/vendas/:id/status', async (req, res) => {
 
         // 2. Altera o status no banco
         await pool.query("UPDATE vendas SET status = $1 WHERE id = $2", [novoStatus, idVenda]); 
-        res.json({ sucesso: true }); 
+
+        // 📢 Avisa o Kanban do PC e o App do Entregador em tempo real (sem precisar de F5)
+        io.emit('novo_pedido_kanban', { 
+            id: venda ? (venda.numero_diario || venda.id) : idVenda, 
+            cliente: venda ? venda.cliente_nome : 'Cliente', 
+            status: novoStatus 
+        });
+
+        res.json({ sucesso: true });
 
         // ==========================================
         // 🛡️ MÁGICA DA AUDITORIA: ESTORNO E ESTOQUE
