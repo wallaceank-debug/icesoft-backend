@@ -639,16 +639,21 @@ app.post('/api/vendas', async (req, res) => {
             } catch (errCupom) { console.error("Erro ao registrar estatísticas do cupom:", errCupom); }
         }
 
-        // Define que o sininho só deve tocar se for um pedido novo vindo do Cardápio Online
-        const ehNovoPedidoOnline = (status === 'Pendente Delivery');
-
-        // Avisa todos os dispositivos conectados que tem pedido novo!
-        io.emit('novo_pedido_kanban', { 
-            id: numeroDiario, 
-            cliente: cliente_nome, 
-            status: status || 'Concluída',
-            tocar_som: ehNovoPedidoOnline
-        });
+        // 🔔 SÓ emite 'novo_pedido_kanban' (que toca o sininho) se for pedido novo do Cardápio Online!
+        if (status === 'Pendente Delivery') {
+            io.emit('novo_pedido_kanban', { 
+                id: numeroDiario, 
+                cliente: cliente_nome, 
+                status: status,
+                tocar_som: true
+            });
+        } else {
+            // 🔇 Se for venda de Balcão/Mesa ou Pix aguardando, usa o sinal silencioso
+            io.emit('status_pedido_atualizado', { 
+                id: numeroDiario, 
+                status: status || 'Concluída' 
+            });
+        }
 
         try {
           let itensComprados = typeof itens === 'string' ? JSON.parse(itens) : (itens || []);
@@ -820,12 +825,11 @@ app.put('/api/vendas/:id/status', async (req, res) => {
         // 2. Altera o status no banco
         await pool.query("UPDATE vendas SET status = $1 WHERE id = $2", [novoStatus, idVenda]); 
 
-        // 📢 Avisa o Kanban do PC e o App do Entregador em tempo real (Silencioso: não toca o sininho)
-        io.emit('novo_pedido_kanban', { 
+        // 🔇 Sinal exclusivo de mudança de etapa (Atualiza o Kanban e o App do Entregador sem acionar sininhos)
+        io.emit('status_pedido_atualizado', { 
             id: venda ? (venda.numero_diario || venda.id) : idVenda, 
             cliente: venda ? venda.cliente_nome : 'Cliente', 
-            status: novoStatus,
-            tocar_som: false
+            status: novoStatus 
         });
 
         res.json({ sucesso: true });
@@ -1052,8 +1056,8 @@ app.put('/api/vendas/:id/restaurar', async (req, res) => {
             }
         } catch(errEstoque) { console.error("Erro ao abater estoque na restauração:", errEstoque); }
 
-        // 3. Grita no rádio para o Kanban e telas atualizarem
-        io.emit('novo_pedido_kanban', {
+        // 3. Atualiza o Kanban silenciosamente
+        io.emit('status_pedido_atualizado', {
             id: venda.numero_diario || venda.id,
             cliente: venda.cliente_nome,
             status: 'A Preparar'
