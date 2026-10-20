@@ -639,11 +639,15 @@ app.post('/api/vendas', async (req, res) => {
             } catch (errCupom) { console.error("Erro ao registrar estatísticas do cupom:", errCupom); }
         }
 
+        // Define que o sininho só deve tocar se for um pedido novo vindo do Cardápio Online
+        const ehNovoPedidoOnline = (status === 'Pendente Delivery');
+
         // Avisa todos os dispositivos conectados que tem pedido novo!
         io.emit('novo_pedido_kanban', { 
             id: numeroDiario, 
             cliente: cliente_nome, 
-            status: status || 'Concluída' 
+            status: status || 'Concluída',
+            tocar_som: ehNovoPedidoOnline
         });
 
         try {
@@ -816,11 +820,12 @@ app.put('/api/vendas/:id/status', async (req, res) => {
         // 2. Altera o status no banco
         await pool.query("UPDATE vendas SET status = $1 WHERE id = $2", [novoStatus, idVenda]); 
 
-        // 📢 Avisa o Kanban do PC e o App do Entregador em tempo real (sem precisar de F5)
+        // 📢 Avisa o Kanban do PC e o App do Entregador em tempo real (Silencioso: não toca o sininho)
         io.emit('novo_pedido_kanban', { 
             id: venda ? (venda.numero_diario || venda.id) : idVenda, 
             cliente: venda ? venda.cliente_nome : 'Cliente', 
-            status: novoStatus 
+            status: novoStatus,
+            tocar_som: false
         });
 
         res.json({ sucesso: true });
@@ -1960,7 +1965,8 @@ app.post('/api/pagamento/webhook', async (req, res) => {
                     io.emit('novo_pedido_kanban', { 
                         id: pedido.numero_diario, 
                         cliente: pedido.cliente_nome, 
-                        status: 'Pendente Delivery' 
+                        status: 'Pendente Delivery',
+                        tocar_som: true
                     });
                 }
             }
