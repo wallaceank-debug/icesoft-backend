@@ -1591,14 +1591,14 @@ app.post('/api/produtos', async (req, res) => {
                 limites_grupos, pontos_ganhos, pontos_resgate, resgate_dinheiro, is_combo, combo_itens
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING *`, 
             [
-                p.nome, p.descricao, p.preco, p.emoji, p.categoria || 'Outros', p.grupos_ids || [], p.imagem_url, 
-                p.venda_por_peso || false, p.tag || '', p.tipo_promocao || 'nenhuma', p.valor_promocao || 0, 
-                p.promo_dias || '', p.promo_inicio || '', p.promo_fim || '', p.promo_pdv || false, 
-                JSON.stringify(p.categorias_adicionais || []), p.controlar_estoque || false, p.mostrar_estoque || false, 
-                p.custo || 0, p.insumos_json || '[]', JSON.stringify(p.limites_grupos || {}),
-                p.pontos_ganhos || 0, p.pontos_resgate || 0, p.resgate_dinheiro || 0,
-                p.is_combo || false, p.combo_itens || '[]'
-            ]);
+                    p.nome, p.descricao, p.preco, p.emoji, p.categoria || 'Outros', JSON.stringify(p.grupos_ids || []), p.imagem_url,
+                    p.venda_por_peso || false, p.tag || '', p.tipo_promocao || 'nenhuma', p.valor_promocao || 0,
+                    p.promo_dias || '', p.promo_inicio || '', p.promo_fim || '', p.promo_pdv || false,
+                    JSON.stringify(p.categorias_adicionais || []), p.controlar_estoque || false, p.mostrar_estoque || false,
+                    p.custo || 0, p.insumos_json || '[]', JSON.stringify(p.limites_grupos || {}),
+                    p.pontos_ganhos || 0, p.pontos_resgate || 0, p.resgate_dinheiro || 0,
+                    p.is_combo || false, p.combo_itens || '[]'
+                ]);
         res.json({ sucesso: true, produto: result.rows[0] }); 
     } catch (e) { 
         console.error("Erro ao criar produto:", e);
@@ -1619,15 +1619,15 @@ app.put('/api/produtos/:id', async (req, res) => {
                 is_combo = $25, combo_itens = $26
             WHERE id = $27 RETURNING *`, 
             [
-                p.nome, p.descricao, p.preco, p.emoji, p.categoria || 'Outros', p.grupos_ids || [], p.imagem_url, 
-                p.venda_por_peso || false, p.tag || '', p.tipo_promocao || 'nenhuma', p.valor_promocao || 0, 
-                p.promo_dias || '', p.promo_inicio || '', p.promo_fim || '', p.promo_pdv || false, 
-                JSON.stringify(p.categorias_adicionais || []), p.controlar_estoque || false, p.mostrar_estoque || false, 
-                p.custo || 0, p.insumos_json || '[]', JSON.stringify(p.limites_grupos || {}),
-                p.pontos_ganhos || 0, p.pontos_resgate || 0, p.resgate_dinheiro || 0,
-                p.is_combo || false, p.combo_itens || '[]',
-                req.params.id
-            ]);
+                    p.nome, p.descricao, p.preco, p.emoji, p.categoria || 'Outros', JSON.stringify(p.grupos_ids || []), p.imagem_url,
+                    p.venda_por_peso || false, p.tag || '', p.tipo_promocao || 'nenhuma', p.valor_promocao || 0,
+                    p.promo_dias || '', p.promo_inicio || '', p.promo_fim || '', p.promo_pdv || false,
+                    JSON.stringify(p.categorias_adicionais || []), p.controlar_estoque || false, p.mostrar_estoque || false,
+                    p.custo || 0, p.insumos_json || '[]', JSON.stringify(p.limites_grupos || {}),
+                    p.pontos_ganhos || 0, p.pontos_resgate || 0, p.resgate_dinheiro || 0,
+                    p.is_combo || false, p.combo_itens || '[]',
+                    req.params.id
+                ]);
         res.json({ sucesso: true, produto: result.rows[0] }); 
     } catch (e) { 
         console.error("Erro ao atualizar produto:", e);
