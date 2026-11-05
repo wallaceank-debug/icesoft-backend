@@ -255,10 +255,11 @@ pool.connect()
 
         // 🛠️ AUTO-CURA AMPLIADA: Sincroniza os contadores de IDs para todas as tabelas de alto fluxo
         try {
-            const tabelasCriticas = ['fin_lancamentos', 'vendas', 'controle_caixa', 'movimentacoes_caixa', 'funil_eventos', 'fin_categorias', 'fin_contas_bancarias'];
+            const tabelasCriticas = ['produtos', 'grupos_adicionais', 'categorias', 'insumos', 'bairros', 'cidades', 'fin_lancamentos', 'vendas', 'controle_caixa', 'movimentacoes_caixa', 'funil_eventos', 'fin_categorias', 'fin_contas_bancarias'];
             for (let tabela of tabelasCriticas) {
                 await pool.query(`SELECT setval(pg_get_serial_sequence('${tabela}', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM ${tabela};`).catch(()=>null);
             }
+            await pool.query("UPDATE produtos SET estoque = NULL WHERE controlar_estoque = false").catch(()=>null);
         } catch (e) { console.log("Aviso: Sincronização de sequências pulada."); }
 
         console.log("📦 Estrutura do Banco 100% Blindada e Pronta!");
@@ -709,7 +710,7 @@ app.post('/api/vendas', async (req, res) => {
           // Executa a baixa consolidada no banco de dados e bloqueia imediatamente se zerar
           for (let idProd in mapBaixaProdutos) {
               let prod = produtosNoBanco.find(x => Number(x.id) === Number(idProd));
-              if (prod && (prod.controlar_estoque === true || prod.estoque !== null)) {
+              if (prod && prod.controlar_estoque === true) {
                   let qtdAbater = mapBaixaProdutos[idProd];
                   let novoEstoque = (Number(prod.estoque) || 0) - qtdAbater;
                   let continuaAtivo = prod.ativo;
@@ -1583,6 +1584,15 @@ app.put('/api/produtos/ordem', async (req, res) => { try { for (let p of req.bod
 app.post('/api/produtos', async (req, res) => { 
     try { 
         const p = req.body;
+
+        await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS is_combo BOOLEAN DEFAULT false").catch(()=>null);
+        await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS combo_itens JSONB DEFAULT '[]'").catch(()=>null);
+        await pool.query("SELECT setval(pg_get_serial_sequence('produtos', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM produtos;").catch(()=>null);
+
+        const insumosStr = typeof p.insumos_json === 'string' ? (p.insumos_json || '[]') : JSON.stringify(p.insumos_json || []);
+        const comboStr = typeof p.combo_itens === 'string' ? (p.combo_itens || '[]') : JSON.stringify(p.combo_itens || []);
+        const limitesStr = typeof p.limites_grupos === 'string' ? (p.limites_grupos || '{}') : JSON.stringify(p.limites_grupos || {});
+
         const result = await pool.query(`
             INSERT INTO produtos (
                 nome, descricao, preco, emoji, categoria, grupos_ids, imagem_url, venda_por_peso, 
@@ -1591,24 +1601,49 @@ app.post('/api/produtos', async (req, res) => {
                 limites_grupos, pontos_ganhos, pontos_resgate, resgate_dinheiro, is_combo, combo_itens
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING *`, 
             [
-                    p.nome, p.descricao, p.preco, p.emoji, p.categoria || 'Outros', JSON.stringify(p.grupos_ids || []), p.imagem_url,
-                    p.venda_por_peso || false, p.tag || '', p.tipo_promocao || 'nenhuma', p.valor_promocao || 0,
-                    p.promo_dias || '', p.promo_inicio || '', p.promo_fim || '', p.promo_pdv || false,
-                    JSON.stringify(p.categorias_adicionais || []), p.controlar_estoque || false, p.mostrar_estoque || false,
-                    p.custo || 0, p.insumos_json || '[]', JSON.stringify(p.limites_grupos || {}),
-                    p.pontos_ganhos || 0, p.pontos_resgate || 0, p.resgate_dinheiro || 0,
-                    p.is_combo || false, p.combo_itens || '[]'
-                ]);
+                p.nome,
+                p.descricao || '',
+                Number(p.preco) || 0,
+                p.emoji || '🍨',
+                p.categoria || 'Outros',
+                JSON.stringify(Array.isArray(p.grupos_ids) ? p.grupos_ids : []),
+                p.imagem_url || '',
+                Boolean(p.venda_por_peso),
+                p.tag || '',
+                p.tipo_promocao || 'nenhuma',
+                Number(p.valor_promocao) || 0,
+                p.promo_dias || '',
+                p.promo_inicio || '',
+                p.promo_fim || '',
+                Boolean(p.promo_pdv),
+                JSON.stringify(Array.isArray(p.categorias_adicionais) ? p.categorias_adicionais : []),
+                Boolean(p.controlar_estoque),
+                Boolean(p.mostrar_estoque),
+                Number(p.custo) || 0,
+                insumosStr,
+                limitesStr,
+                parseInt(p.pontos_ganhos) || 0,
+                parseInt(p.pontos_resgate) || 0,
+                Number(p.resgate_dinheiro) || 0,
+                Boolean(p.is_combo),
+                comboStr
+            ]
+        );
         res.json({ sucesso: true, produto: result.rows[0] }); 
     } catch (e) { 
         console.error("Erro ao criar produto:", e);
-        res.status(500).json({erro:"Erro ao criar produto"}); 
+        res.status(500).json({ erro: "Erro ao criar produto", detalhe: e.message }); 
     } 
 });
 
 app.put('/api/produtos/:id', async (req, res) => { 
     try { 
         const p = req.body;
+        const controlarEstoque = Boolean(p.controlar_estoque);
+        const insumosStr = typeof p.insumos_json === 'string' ? (p.insumos_json || '[]') : JSON.stringify(p.insumos_json || []);
+        const comboStr = typeof p.combo_itens === 'string' ? (p.combo_itens || '[]') : JSON.stringify(p.combo_itens || []);
+        const limitesStr = typeof p.limites_grupos === 'string' ? (p.limites_grupos || '{}') : JSON.stringify(p.limites_grupos || {});
+
         const result = await pool.query(`
             UPDATE produtos SET 
                 nome = $1, descricao = $2, preco = $3, emoji = $4, categoria = $5, grupos_ids = $6, 
@@ -1616,22 +1651,43 @@ app.put('/api/produtos/:id', async (req, res) => {
                 promo_dias = $12, promo_inicio = $13, promo_fim = $14, promo_pdv = $15, categorias_adicionais = $16, 
                 controlar_estoque = $17, mostrar_estoque = $18, custo = $19, insumos_json = $20, 
                 limites_grupos = $21, pontos_ganhos = $22, pontos_resgate = $23, resgate_dinheiro = $24,
-                is_combo = $25, combo_itens = $26
+                is_combo = $25, combo_itens = $26,
+                estoque = CASE WHEN $17::boolean = false THEN NULL ELSE estoque END
             WHERE id = $27 RETURNING *`, 
             [
-                    p.nome, p.descricao, p.preco, p.emoji, p.categoria || 'Outros', JSON.stringify(p.grupos_ids || []), p.imagem_url,
-                    p.venda_por_peso || false, p.tag || '', p.tipo_promocao || 'nenhuma', p.valor_promocao || 0,
-                    p.promo_dias || '', p.promo_inicio || '', p.promo_fim || '', p.promo_pdv || false,
-                    JSON.stringify(p.categorias_adicionais || []), p.controlar_estoque || false, p.mostrar_estoque || false,
-                    p.custo || 0, p.insumos_json || '[]', JSON.stringify(p.limites_grupos || {}),
-                    p.pontos_ganhos || 0, p.pontos_resgate || 0, p.resgate_dinheiro || 0,
-                    p.is_combo || false, p.combo_itens || '[]',
-                    req.params.id
-                ]);
+                p.nome,
+                p.descricao || '',
+                Number(p.preco) || 0,
+                p.emoji || '🍨',
+                p.categoria || 'Outros',
+                JSON.stringify(Array.isArray(p.grupos_ids) ? p.grupos_ids : []),
+                p.imagem_url || '',
+                Boolean(p.venda_por_peso),
+                p.tag || '',
+                p.tipo_promocao || 'nenhuma',
+                Number(p.valor_promocao) || 0,
+                p.promo_dias || '',
+                p.promo_inicio || '',
+                p.promo_fim || '',
+                Boolean(p.promo_pdv),
+                JSON.stringify(Array.isArray(p.categorias_adicionais) ? p.categorias_adicionais : []),
+                controlarEstoque,
+                Boolean(p.mostrar_estoque),
+                Number(p.custo) || 0,
+                insumosStr,
+                limitesStr,
+                parseInt(p.pontos_ganhos) || 0,
+                parseInt(p.pontos_resgate) || 0,
+                Number(p.resgate_dinheiro) || 0,
+                Boolean(p.is_combo),
+                comboStr,
+                req.params.id
+            ]
+        );
         res.json({ sucesso: true, produto: result.rows[0] }); 
     } catch (e) { 
         console.error("Erro ao atualizar produto:", e);
-        res.status(500).json({erro:"Erro ao atualizar produto"}); 
+        res.status(500).json({ erro: "Erro ao atualizar produto", detalhe: e.message }); 
     } 
 });
 app.delete('/api/produtos/:id', async (req, res) => { try { await pool.query('DELETE FROM produtos WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
