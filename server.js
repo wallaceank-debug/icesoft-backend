@@ -1581,17 +1581,55 @@ app.put('/api/insumos/:id/abastecer', async (req, res) => {
 
 app.get('/api/produtos', async (req, res) => { try { res.json((await pool.query('SELECT * FROM produtos ORDER BY ordem ASC, id ASC')).rows.map(p => ({...p, preco: parseFloat(p.preco)}))); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/produtos/ordem', async (req, res) => { try { for (let p of req.body) { await pool.query('UPDATE produtos SET ordem = $1 WHERE id = $2', [p.ordem, p.id]); } res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro: "Erro"}); } });
-app.post('/api/produtos', async (req, res) => { 
-    try { 
-        const p = req.body;
-
+async function garantirEstruturaProdutos() {
+    try {
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS is_combo BOOLEAN DEFAULT false").catch(()=>null);
         await pool.query("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS combo_itens JSONB DEFAULT '[]'").catch(()=>null);
         await pool.query("SELECT setval(pg_get_serial_sequence('produtos', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM produtos;").catch(()=>null);
 
-        const insumosStr = typeof p.insumos_json === 'string' ? (p.insumos_json || '[]') : JSON.stringify(p.insumos_json || []);
-        const comboStr = typeof p.combo_itens === 'string' ? (p.combo_itens || '[]') : JSON.stringify(p.combo_itens || []);
-        const limitesStr = typeof p.limites_grupos === 'string' ? (p.limites_grupos || '{}') : JSON.stringify(p.limites_grupos || {});
+        // Converte automaticamente qualquer coluna antiga do tipo ARRAY para JSONB sem perder dados
+        const colsArray = await pool.query(`
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'produtos' AND data_type = 'ARRAY'
+        `);
+        for (let row of colsArray.rows) {
+            const col = row.column_name;
+            await pool.query(`ALTER TABLE produtos ALTER COLUMN "${col}" DROP DEFAULT`).catch(()=>null);
+            await pool.query(`ALTER TABLE produtos ALTER COLUMN "${col}" TYPE JSONB USING COALESCE(to_jsonb("${col}"), '[]'::jsonb)`).catch(()=>null);
+            await pool.query(`ALTER TABLE produtos ALTER COLUMN "${col}" SET DEFAULT '[]'::jsonb`).catch(()=>null);
+        }
+    } catch (e) {
+        console.error("Aviso ao verificar estrutura de produtos:", e.message);
+    }
+}
+
+const normalizarJsonArray = (val) => {
+    if (Array.isArray(val)) return JSON.stringify(val);
+    if (typeof val === 'string') {
+        try {
+            const parsed = JSON.parse(val);
+            return Array.isArray(parsed) ? JSON.stringify(parsed) : '[]';
+        } catch (e) { return '[]'; }
+    }
+    return '[]';
+};
+
+const normalizarJsonObj = (val) => {
+    if (val && typeof val === 'object' && !Array.isArray(val)) return JSON.stringify(val);
+    if (typeof val === 'string') {
+        try {
+            const parsed = JSON.parse(val);
+            return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? JSON.stringify(parsed) : '{}';
+        } catch (e) { return '{}'; }
+    }
+    return '{}';
+};
+
+app.post('/api/produtos', async (req, res) => { 
+    try { 
+        const p = req.body;
+        await garantirEstruturaProdutos();
 
         const result = await pool.query(`
             INSERT INTO produtos (
@@ -1606,7 +1644,7 @@ app.post('/api/produtos', async (req, res) => {
                 Number(p.preco) || 0,
                 p.emoji || '🍨',
                 p.categoria || 'Outros',
-                JSON.stringify(Array.isArray(p.grupos_ids) ? p.grupos_ids : []),
+                normalizarJsonArray(p.grupos_ids),
                 p.imagem_url || '',
                 Boolean(p.venda_por_peso),
                 p.tag || '',
@@ -1616,17 +1654,17 @@ app.post('/api/produtos', async (req, res) => {
                 p.promo_inicio || '',
                 p.promo_fim || '',
                 Boolean(p.promo_pdv),
-                JSON.stringify(Array.isArray(p.categorias_adicionais) ? p.categorias_adicionais : []),
+                normalizarJsonArray(p.categorias_adicionais),
                 Boolean(p.controlar_estoque),
                 Boolean(p.mostrar_estoque),
                 Number(p.custo) || 0,
-                insumosStr,
-                limitesStr,
+                normalizarJsonArray(p.insumos_json),
+                normalizarJsonObj(p.limites_grupos),
                 parseInt(p.pontos_ganhos) || 0,
                 parseInt(p.pontos_resgate) || 0,
                 Number(p.resgate_dinheiro) || 0,
                 Boolean(p.is_combo),
-                comboStr
+                normalizarJsonArray(p.combo_itens)
             ]
         );
         res.json({ sucesso: true, produto: result.rows[0] }); 
@@ -1639,10 +1677,8 @@ app.post('/api/produtos', async (req, res) => {
 app.put('/api/produtos/:id', async (req, res) => { 
     try { 
         const p = req.body;
+        await garantirEstruturaProdutos();
         const controlarEstoque = Boolean(p.controlar_estoque);
-        const insumosStr = typeof p.insumos_json === 'string' ? (p.insumos_json || '[]') : JSON.stringify(p.insumos_json || []);
-        const comboStr = typeof p.combo_itens === 'string' ? (p.combo_itens || '[]') : JSON.stringify(p.combo_itens || []);
-        const limitesStr = typeof p.limites_grupos === 'string' ? (p.limites_grupos || '{}') : JSON.stringify(p.limites_grupos || {});
 
         const result = await pool.query(`
             UPDATE produtos SET 
@@ -1660,7 +1696,7 @@ app.put('/api/produtos/:id', async (req, res) => {
                 Number(p.preco) || 0,
                 p.emoji || '🍨',
                 p.categoria || 'Outros',
-                JSON.stringify(Array.isArray(p.grupos_ids) ? p.grupos_ids : []),
+                normalizarJsonArray(p.grupos_ids),
                 p.imagem_url || '',
                 Boolean(p.venda_por_peso),
                 p.tag || '',
@@ -1670,17 +1706,17 @@ app.put('/api/produtos/:id', async (req, res) => {
                 p.promo_inicio || '',
                 p.promo_fim || '',
                 Boolean(p.promo_pdv),
-                JSON.stringify(Array.isArray(p.categorias_adicionais) ? p.categorias_adicionais : []),
+                normalizarJsonArray(p.categorias_adicionais),
                 controlarEstoque,
                 Boolean(p.mostrar_estoque),
                 Number(p.custo) || 0,
-                insumosStr,
-                limitesStr,
+                normalizarJsonArray(p.insumos_json),
+                normalizarJsonObj(p.limites_grupos),
                 parseInt(p.pontos_ganhos) || 0,
                 parseInt(p.pontos_resgate) || 0,
                 Number(p.resgate_dinheiro) || 0,
                 Boolean(p.is_combo),
-                comboStr,
+                normalizarJsonArray(p.combo_itens),
                 req.params.id
             ]
         );
