@@ -1239,21 +1239,26 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
         `, [caixa.data_abertura, caixa.data_fechamento]);
 
         let totalDinheiro = 0;
-        let totalDigital = 0;
+        let totalPix = 0;
+        let totalCartaoOutros = 0;
 
         vendasQuery.rows.forEach(v => {
             if (v.pagamentos_detalhes) {
-                // Lê o DNA exato dos pagamentos divididos
+                // Lê o DNA exato dos pagamentos divididos separando Pix de Cartão
                 const pd = typeof v.pagamentos_detalhes === 'string' ? JSON.parse(v.pagamentos_detalhes) : v.pagamentos_detalhes;
                 totalDinheiro += parseFloat(pd.dinheiro || 0);
-                totalDigital += parseFloat(pd.pix || 0) + parseFloat(pd.cartao || 0) + parseFloat(pd.outros || 0);
+                totalPix += parseFloat(pd.pix || 0);
+                totalCartaoOutros += parseFloat(pd.cartao || 0) + parseFloat(pd.outros || 0);
             } else {
                 // Sistema antigo (Retrocompatibilidade)
                 const valor = parseFloat(v.valor_total);
-                if (v.forma_pagamento && v.forma_pagamento.toLowerCase().includes('dinheiro')) {
+                const fp = (v.forma_pagamento || '').toLowerCase();
+                if (fp.includes('dinheiro')) {
                     totalDinheiro += valor;
+                } else if (fp.includes('pix')) {
+                    totalPix += valor;
                 } else {
-                    totalDigital += valor;
+                    totalCartaoOutros += valor;
                 }
             }
         });
@@ -1299,12 +1304,20 @@ app.put('/api/caixa/fechar/:id', async (req, res) => {
             `, [`Fechamento de Caixa #${caixa.id} (Dinheiro)`, totalDinheiro, dataFormatada, categoriaId, contaFisicoId]));
         }
 
-        // B. Injeta as Vendas Digitais
-        if (totalDigital > 0) {
+        // B1. Injeta o Lote de PIX na Conta de Transição (Pronto para auditar)
+        if (totalPix > 0) {
             promessasLancamentos.push(pool.query(`
                 INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
                 VALUES ($1, $2, $3, 'Pago', 'Receita', $4, $5)
-            `, [`Fechamento de Caixa #${caixa.id} (Cartões/Pix/Ifood)`, totalDigital, dataFormatada, categoriaId, contaTransicaoId]));
+            `, [`Fechamento de Caixa #${caixa.id} (PIX)`, totalPix, dataFormatada, categoriaId, contaTransicaoId]));
+        }
+
+        // B2. Injeta o Lote de Cartões na Conta de Transição (Pronto para auditar e descontar taxa)
+        if (totalCartaoOutros > 0) {
+            promessasLancamentos.push(pool.query(`
+                INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, status, tipo, categoria_id, conta_id)
+                VALUES ($1, $2, $3, 'Pago', 'Receita', $4, $5)
+            `, [`Fechamento de Caixa #${caixa.id} (Cartões)`, totalCartaoOutros, dataFormatada, categoriaId, contaTransicaoId]));
         }
 
         // C. Injeta Sangrias e Suprimentos com as categorias corretas (Estilo Yampa)
