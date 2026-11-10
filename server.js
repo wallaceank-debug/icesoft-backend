@@ -2254,7 +2254,7 @@ app.get('/api/financeiro/resumo', verificarToken, async (req, res) => {
         const entradasQuery = await pool.query(`SELECT COALESCE(SUM(l.valor), 0) as total FROM fin_lancamentos l LEFT JOIN fin_categorias c ON l.categoria_id = c.id WHERE l.tipo = 'Receita' AND l.status = 'Pago' AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna')`);
         const saidasQuery = await pool.query(`SELECT COALESCE(SUM(l.valor), 0) as total FROM fin_lancamentos l LEFT JOIN fin_categorias c ON l.categoria_id = c.id WHERE l.tipo = 'Despesa' AND l.status = 'Pago' AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna')`);
         
-        const vendasTotalQuery = await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE status NOT ILIKE '%cancelad%'`);
+        const vendasTotalQuery = await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE status NOT ILIKE '%cancelad%' AND status != 'Aguardando Pagamento'`);
 
         const faturamentoTotalPDV = parseFloat(vendasTotalQuery.rows[0].total);
         const saldoGeralSistemico = parseFloat(entradasQuery.rows[0].total) - parseFloat(saidasQuery.rows[0].total) + faturamentoTotalPDV;
@@ -2559,8 +2559,9 @@ app.get('/api/financeiro/dre', async (req, res) => {
             SELECT COALESCE(SUM(valor_total), 0) as total, COALESCE(SUM(custo_real), 0) as custo_consumido 
             FROM vendas 
             WHERE status NOT ILIKE '%cancelad%'
-            AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
-            AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
+            AND status != 'Aguardando Pagamento'
+            AND EXTRACT(MONTH FROM (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
+            AND EXTRACT(YEAR FROM (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
         `);
         const faturamentoAutomaticoMes = parseFloat(vendasMesQuery.rows[0].total);
         const cmvConsumidoMes = parseFloat(vendasMesQuery.rows[0].custo_consumido);
@@ -2726,8 +2727,9 @@ app.get('/api/financeiro/graficos', verificarToken, async (req, res) => {
             SELECT COALESCE(SUM(valor_total), 0) as total 
             FROM vendas 
             WHERE status NOT ILIKE '%cancelad%' 
-            AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE) 
-            AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)
+            AND status != 'Aguardando Pagamento'
+            AND EXTRACT(MONTH FROM (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date) 
+            AND EXTRACT(YEAR FROM (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
         `);
 
         // Total de Receitas limpo (sem dupla contagem do fechamento de caixa que gera "movimentacao_interna")
@@ -2741,8 +2743,8 @@ app.get('/api/financeiro/graficos', verificarToken, async (req, res) => {
             JOIN fin_categorias c ON l.categoria_id = c.id
             WHERE l.tipo = 'Despesa' AND l.status = 'Pago'
             AND c.dre_ref != 'movimentacao_interna'
-            AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM CURRENT_DATE) 
-            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM CURRENT_DATE)
+            AND EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date) 
+            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
             GROUP BY c.nome
             ORDER BY total DESC
         `);
@@ -2752,8 +2754,9 @@ app.get('/api/financeiro/graficos', verificarToken, async (req, res) => {
             SELECT origem, SUM(valor_total) as total
             FROM vendas
             WHERE status NOT ILIKE '%cancelad%' 
-            AND EXTRACT(MONTH FROM data_hora) = EXTRACT(MONTH FROM CURRENT_DATE) 
-            AND EXTRACT(YEAR FROM data_hora) = EXTRACT(YEAR FROM CURRENT_DATE)
+            AND status != 'Aguardando Pagamento'
+            AND EXTRACT(MONTH FROM (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date) 
+            AND EXTRACT(YEAR FROM (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
             GROUP BY origem
             ORDER BY total DESC
         `);
@@ -2843,9 +2846,12 @@ app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
         const bancosQuery = await pool.query("SELECT COALESCE(SUM(saldo_inicial), 0) as total FROM fin_contas_bancarias");
         const saldoBancosOrigem = parseFloat(bancosQuery.rows[0].total);
 
+        const { visao } = req.query; // Permite alternar entre 'previsto' e 'efetuado' no mês atual
+
         const vendasPassadoQuery = await pool.query(`
             SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas 
-            WHERE status NOT ILIKE '%cancelad%' AND data_hora < $1
+            WHERE status NOT ILIKE '%cancelad%' AND status != 'Aguardando Pagamento'
+            AND (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date < $1
         `, [dataInicioJanela]);
         
         const lancamentosPassadoQuery = await pool.query(`
@@ -2865,10 +2871,13 @@ app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
         // Montante exato da empresa no primeiro dia do nosso Dashboard
         let saldoAcumulado = saldoBancosOrigem + receitasPassado - despesasPassado; 
 
-        // 3. Busca os dados apenas da janela de 12 meses
+        // 3. Busca os dados apenas da janela de 12 meses (com Fuso de Brasília)
         const vendasQuery = await pool.query(`
-            SELECT TO_CHAR(data_hora, 'YYYY-MM') as mes, COALESCE(SUM(valor_total), 0) as total
-            FROM vendas WHERE status NOT ILIKE '%cancelad%' AND data_hora >= $1 GROUP BY mes
+            SELECT TO_CHAR(data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM') as mes, COALESCE(SUM(valor_total), 0) as total
+            FROM vendas 
+            WHERE status NOT ILIKE '%cancelad%' AND status != 'Aguardando Pagamento'
+            AND (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date >= $1 
+            GROUP BY mes
         `, [dataInicioJanela]);
 
         const lancamentosQuery = await pool.query(`
@@ -2892,7 +2901,8 @@ app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
             let detalhes = { receitas_manuais: {}, cmv: {}, despesas_operacionais: {}, despesas_vendas: {}, deducoes: {}, financeiras_invest: {} };
 
             lancamentosMes.forEach(l => {
-                // EXIGE liquidação (Pago) se o mês já passou. Permite projeção se for atual/futuro.
+                // Se a chave estiver em 'efetuado', ignora contas pendentes também no mês atual para bater com o saldo bancário de hoje
+                if (visao === 'efetuado' && l.status !== 'Pago') return;
                 if (mes < mesAtualStr && l.status !== 'Pago') return;
 
                 const valor = parseFloat(l.total);
