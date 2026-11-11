@@ -788,7 +788,7 @@ app.post('/api/vendas', async (req, res) => {
                             }
                         } catch(erroFid) {}
                         textoPronto += resumo;
-                    } else if (config.msg_recebido && config.msg_recebido.trim() !== '') {
+                    } else if (status !== 'Aguardando Pagamento' && config.msg_recebido && config.msg_recebido.trim() !== '') {
                         textoPronto = config.msg_recebido.replace(/{nome}/g, primeiroNome).replace(/{pedido}/g, numeroDiario || 'Novo').replace(/{tempo}/g, tempoEstimado);
                         enviarMsg = true;
                     }
@@ -2051,6 +2051,60 @@ app.post('/api/pagamento/pix', async (req, res) => {
     }
 });
 
+async function aprovarPedidoPixNoSistema(transacaoId, origemConfirmacao) {
+    const resultado = await pool.query(
+        "UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1 AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Pronto para Retirada', 'Entregue', 'Concluída', 'Cancelado') RETURNING id, numero_diario, cliente_nome, cliente_telefone", 
+        [transacaoId.toString()]
+    );
+
+    if (resultado.rows.length > 0) {
+        const pedido = resultado.rows[0];
+        console.log(`✅ Pagamento Pix ${transacaoId} APROVADO (${origemConfirmacao})! Disparando Pedido #${pedido.numero_diario || pedido.id} no Kanban.`);
+        
+        // 1. Toca a campainha e joga na tela do Kanban
+        io.emit('novo_pedido_kanban', { 
+            id: pedido.numero_diario || pedido.id, 
+            cliente: pedido.cliente_nome, 
+            status: 'Pendente Delivery',
+            tocar_som: true
+        });
+
+        // 2. Avisa o cliente no WhatsApp que o Pix foi confirmado e o pedido recebido!
+        if (pedido.cliente_telefone && pedido.cliente_telefone.trim() !== '') {
+            try {
+                const config = (await pool.query('SELECT * FROM integracoes_config LIMIT 1')).rows[0];
+                const tempoQuery = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'tempo_entrega'");
+                const tempoEstimado = tempoQuery.rows.length > 0 ? tempoQuery.rows[0].valor : '45';
+
+                if (config && config.zap_url && config.zap_key && config.zap_instancia && config.msg_recebido && config.msg_recebido.trim() !== '') {
+                    const primeiroNome = pedido.cliente_nome ? pedido.cliente_nome.split(' ')[0] : 'Cliente';
+                    const textoPronto = config.msg_recebido
+                        .replace(/{nome}/g, primeiroNome)
+                        .replace(/{pedido}/g, pedido.numero_diario || pedido.id)
+                        .replace(/{tempo}/g, tempoEstimado);
+
+                    const telefoneLimpo = "55" + pedido.cliente_telefone.replace(/\D/g, '');
+                    const urlZap = config.zap_url.trim().replace(/\/$/, "");
+                    const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
+
+                    fetch(`${urlZap}/message/sendText/${instanciaURL}`, {
+                        method: 'POST',
+                        headers: { 'apikey': config.zap_key.trim(), 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ number: telefoneLimpo, text: textoPronto })
+                    }).catch(err => console.log("⚠️ Erro ao enviar msg Pix recebido:", err.message));
+                }
+            } catch (errZap) {}
+        }
+    } else {
+        const checkExistencia = await pool.query("SELECT id, numero_diario, status FROM vendas WHERE transacao_id = $1", [transacaoId.toString()]);
+        if (checkExistencia.rows.length > 0) {
+            console.log(`ℹ️ Pix ${transacaoId} (${origemConfirmacao}): Pedido #${checkExistencia.rows[0].numero_diario} já estava com status '${checkExistencia.rows[0].status}'.`);
+        } else {
+            console.log(`⚠️ ALERTA PIX ${transacaoId}: Pagamento aprovado no Mercado Pago, mas nenhum pedido com esse transacao_id foi encontrado no banco!`);
+        }
+    }
+}
+
 app.post('/api/pagamento/webhook', async (req, res) => {
     res.status(200).send("OK");
     try {
@@ -2059,28 +2113,12 @@ app.post('/api/pagamento/webhook', async (req, res) => {
             const mpToken = (await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'")).rows[0]?.valor;
             const pgtoInfo = await (await fetch(`https://api.mercadopago.com/v1/payments/${pagamentoId}`, { headers: { 'Authorization': `Bearer ${mpToken}` } })).json();
             if (pgtoInfo.status === 'approved') {
-                
-                // 🛡️ VACINA ANTI-RECUO: Só atualiza se o pedido não estiver nas colunas avançadas
-                const resultado = await pool.query(
-                    "UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1 AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Pronto para Retirada', 'Entregue', 'Concluída') AND status NOT ILIKE '%cancelad%' RETURNING numero_diario, cliente_nome", 
-                    [pagamentoId.toString()]
-                );
-                
-                console.log(`✅ Pagamento Pix ${pagamentoId} APROVADO via Webhook!`);
-
-                // Só toca a campainha no Kanban se a vacina permitiu a atualização
-                if (resultado.rows.length > 0) {
-                    const pedido = resultado.rows[0];
-                    io.emit('novo_pedido_kanban', { 
-                        id: pedido.numero_diario, 
-                        cliente: pedido.cliente_nome, 
-                        status: 'Pendente Delivery',
-                        tocar_som: true
-                    });
-                }
+                await aprovarPedidoPixNoSistema(pagamentoId, 'Webhook');
             }
         }
-    } catch (e) {}
+    } catch (e) {
+        console.error("Erro no processamento do Webhook Pix:", e);
+    }
 });
 
 app.get('/api/pagamento/pix/:id/status', async (req, res) => {
@@ -2088,12 +2126,7 @@ app.get('/api/pagamento/pix/:id/status', async (req, res) => {
         const mpToken = (await pool.query("SELECT valor FROM configuracoes WHERE chave = 'mp_access_token'")).rows[0]?.valor;
         const pgtoInfo = await (await fetch(`https://api.mercadopago.com/v1/payments/${req.params.id}`, { headers: { 'Authorization': `Bearer ${mpToken}` } })).json();
         if (pgtoInfo.status === 'approved') {
-            
-            // 🛡️ VACINA ANTI-RECUO também na checagem da tela do cliente
-            await pool.query(
-                "UPDATE vendas SET status = 'Pendente Delivery' WHERE transacao_id = $1 AND status NOT IN ('Pendente Delivery', 'A Preparar', 'Saiu p/ Entrega', 'Pronto para Retirada', 'Entregue', 'Concluída') AND status NOT ILIKE '%cancelad%'", 
-                [req.params.id.toString()]
-            );
+            await aprovarPedidoPixNoSistema(req.params.id, 'Tela do Cliente');
             res.json({ pago: true });
         } else res.json({ pago: false });
     } catch (e) { res.status(500).json({ erro: "Erro" }); }
@@ -3309,11 +3342,11 @@ setInterval(async () => {
                 }
             } catch(errEstoque) { console.error("Erro ao devolver estoque do Pix Expirado:", errEstoque); }
 
-            // 4. Grita no rádio para todas as telas (Kanban e Vendas) atualizarem sozinhas
-            io.emit('novo_pedido_kanban', { 
+            // 4. Atualiza o Kanban em silêncio (sem tocar a campainha de pedido novo)
+            io.emit('status_pedido_atualizado', { 
                 id: pedido.numero_diario || pedido.id, 
                 cliente: 'Sistema (Faxina Pix)', 
-                status: 'Cancelada' 
+                status: 'Cancelada (Pix Expirado)' 
             });
             console.log(`🧹 Faxina Icesoft: Pedido #${pedido.id} cancelado automaticamente (Pix não pago em 10 min). Estoque devolvido.`);
         }
