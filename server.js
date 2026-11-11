@@ -2550,36 +2550,39 @@ app.put('/api/financeiro/categorias/:id/status', async (req, res) => {
     }
 });
 
-// 6. Relatório DRE Automatizado (Cruzando lançamentos manuais + vendas do PDV)
+// 6. Relatório DRE Automatizado (Com Navegação por Mês e Chave de CMV)
 app.get('/api/financeiro/dre', async (req, res) => {
     try {
-        const { visao } = req.query; // 👇 CAPTURA A CHAVE DO FRONTEND (efetuado ou previsto)
+        const { visao, mes, tipo_cmv } = req.query;
         let filtroStatus = visao === 'efetuado' ? " AND l.status = 'Pago'" : "";
 
-        // 👇 CORREÇÃO FUSO HORÁRIO E FILTRO DE STATUS
+        // Define o mês alvo (YYYY-MM) ou usa o mês atual no fuso de Brasília
+        const mesAlvo = (mes && /^\d{4}-\d{2}$/.test(mes))
+            ? mes
+            : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).slice(0, 7);
+
         const query = `
             SELECT c.dre_ref, COALESCE(SUM(l.valor), 0) as total 
             FROM fin_lancamentos l
             JOIN fin_categorias c ON l.categoria_id = c.id
-            WHERE EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date) 
-            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
+            WHERE TO_CHAR(l.data_vencimento, 'YYYY-MM') = $1
             ${filtroStatus}
             GROUP BY c.dre_ref
         `;
-        const resultado = await pool.query(query);
+        const resultado = await pool.query(query, [mesAlvo]);
         
         const vendasMesQuery = await pool.query(`
             SELECT COALESCE(SUM(valor_total), 0) as total, COALESCE(SUM(custo_real), 0) as custo_consumido 
             FROM vendas 
             WHERE status NOT ILIKE '%cancelad%'
             AND status != 'Aguardando Pagamento'
-            AND EXTRACT(MONTH FROM (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
-            AND EXTRACT(YEAR FROM (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
-        `);
+            AND TO_CHAR(data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM') = $1
+        `, [mesAlvo]);
         const faturamentoAutomaticoMes = parseFloat(vendasMesQuery.rows[0].total);
         const cmvConsumidoMes = parseFloat(vendasMesQuery.rows[0].custo_consumido);
 
         const dre = {
+            mes_referencia: mesAlvo,
             receita_bruta: 0, deducoes: 0, cmv: 0, 
             despesas_vendas: 0, despesas_operacionais: 0, 
             investimentos: 0, despesas_financeiras: 0, 
@@ -2592,17 +2595,16 @@ app.get('/api/financeiro/dre', async (req, res) => {
             if (dre[row.dre_ref] !== undefined) dre[row.dre_ref] = parseFloat(row.total);
         });
 
-        // 👇 APLICA O FILTRO TAMBÉM NA VISÃO DETALHADA
         const queryDetalhes = `
             SELECT c.dre_ref, c.nome, COALESCE(SUM(l.valor), 0) as total 
             FROM fin_lancamentos l
             JOIN fin_categorias c ON l.categoria_id = c.id
-            WHERE EXTRACT(MONTH FROM l.data_vencimento) = EXTRACT(MONTH FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date) 
-            AND EXTRACT(YEAR FROM l.data_vencimento) = EXTRACT(YEAR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')::date)
+            WHERE TO_CHAR(l.data_vencimento, 'YYYY-MM') = $1
             ${filtroStatus}
             GROUP BY c.dre_ref, c.nome
+            ORDER BY total DESC
         `;
-        const resDetalhes = await pool.query(queryDetalhes);
+        const resDetalhes = await pool.query(queryDetalhes, [mesAlvo]);
         resDetalhes.rows.forEach(r => {
             if (!dre.detalhes[r.dre_ref]) dre.detalhes[r.dre_ref] = [];
             dre.detalhes[r.dre_ref].push({ nome: r.nome, total: parseFloat(r.total) });
@@ -2610,12 +2612,26 @@ app.get('/api/financeiro/dre', async (req, res) => {
 
         if (!dre.detalhes['receita_bruta']) dre.detalhes['receita_bruta'] = [];
         if (faturamentoAutomaticoMes > 0) {
-            dre.detalhes['receita_bruta'].push({ nome: 'Faturamento de Vendas (PDV/Delivery)', total: faturamentoAutomaticoMes });
+            dre.detalhes['receita_bruta'].unshift({ nome: 'Faturamento de Vendas (PDV/Delivery)', total: faturamentoAutomaticoMes });
         }
 
-        dre.cmv_financeiro = dre.cmv; // Guarda silenciosamente o que saiu da conta bancária
-        dre.cmv = cmvConsumidoMes; // 🚀 Substitui o CMV do DRE pelo custo real da Ficha Técnica
-        dre.detalhes['cmv'] = [ { nome: 'Custo das Fichas Técnicas (Insumos Consumidos)', total: cmvConsumidoMes } ];
+        // Guarda ambos os custos (Boletos de Compras vs Ficha Técnica) e seus detalhes
+        const detalhesCompras = dre.detalhes['cmv'] || [];
+        dre.cmv_financeiro = dre.cmv;
+        dre.cmv_ficha = cmvConsumidoMes;
+
+        if (tipo_cmv === 'compras') {
+            dre.cmv = dre.cmv_financeiro;
+            dre.detalhes['cmv'] = detalhesCompras.length > 0
+                ? detalhesCompras
+                : [{ nome: 'Nenhuma compra de insumo lançada no período', total: 0 }];
+        } else {
+            dre.cmv = cmvConsumidoMes;
+            dre.detalhes['cmv'] = [
+                { nome: 'Custo das Fichas Técnicas (Insumos Consumidos)', total: cmvConsumidoMes },
+                ...detalhesCompras.map(d => ({ nome: `[Ref. Boleto/Compra] ${d.nome}`, total: d.total }))
+            ];
+        }
 
         dre.receita_bruta = dre.receita_bruta + faturamentoAutomaticoMes;
         dre.outras_receitas = dre.outras_receitas + dre.aporte_capital;
