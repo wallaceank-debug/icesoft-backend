@@ -1498,10 +1498,10 @@ app.put('/api/insumos/:id/sincronizar', async (req, res) => {
     } catch (e) { res.status(500).json({erro: "Erro ao sincronizar estoque"}); }
 });
 
-// 👇 NOVO: Rota para Lançar Compra / Abastecer Estoque
+// 👇 NOVO: Rota para Lançar Compra / Abastecer Estoque (Integrada ao Financeiro)
 app.put('/api/insumos/:id/abastecer', async (req, res) => {
     try {
-        const { quantidade, valor_total } = req.body;
+        const { quantidade, valor_total, lancar_financeiro, conta_id, categoria_id, status_pagamento, data_vencimento } = req.body;
         const qtd = parseFloat(quantidade);
         const valor = parseFloat(valor_total);
         
@@ -1515,6 +1515,27 @@ app.put('/api/insumos/:id/abastecer', async (req, res) => {
             'UPDATE insumos SET estoque = COALESCE(estoque, 0) + $1, custo = $2 WHERE id = $3 RETURNING *',
             [qtd, custo_unitario, req.params.id]
         );
+        const insumoAtualizado = result.rows[0];
+
+        // 💰 INTEGRAÇÃO ESTOQUE -> FINANCEIRO: Cria a despesa automaticamente no DRE e no Banco escolhido
+        if (lancar_financeiro && valor > 0 && insumoAtualizado) {
+            const dataLanc = data_vencimento || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+            const statusFinal = status_pagamento || 'Pago';
+            const descCompra = `[Compra Estoque] ${insumoAtualizado.nome} (${qtd}${insumoAtualizado.unidade})`;
+
+            await pool.query(`
+                INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, data_pagamento, status, tipo, categoria_id, conta_id)
+                VALUES ($1, $2, $3, $4, $5, 'Despesa', $6, $7)
+            `, [
+                descCompra,
+                valor,
+                dataLanc,
+                statusFinal === 'Pago' ? dataLanc : null,
+                statusFinal,
+                categoria_id || null,
+                conta_id || null
+            ]);
+        }
 
         // 👇 INÍCIO DA CORREÇÃO: ATUALIZAR O CUSTO NAS FICHAS TÉCNICAS
         try {
