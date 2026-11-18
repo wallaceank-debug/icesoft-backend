@@ -2297,10 +2297,14 @@ app.get('/api/financeiro/resumo', verificarToken, async (req, res) => {
             AND l.data_vencimento <= (date_trunc('month', CURRENT_DATE) + interval '1 month - 1 day')
         `);
 
-        const entradasQuery = await pool.query(`SELECT COALESCE(SUM(l.valor), 0) as total FROM fin_lancamentos l LEFT JOIN fin_categorias c ON l.categoria_id = c.id WHERE l.tipo = 'Receita' AND l.status = 'Pago' AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna')`);
-        const saidasQuery = await pool.query(`SELECT COALESCE(SUM(l.valor), 0) as total FROM fin_lancamentos l LEFT JOIN fin_categorias c ON l.categoria_id = c.id WHERE l.tipo = 'Despesa' AND l.status = 'Pago' AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna')`);
+        // 📅 DATA DE CORTE FINANCEIRO: Respeita o início do novo ciclo (ex: 2027-01-01) sem apagar o histórico de clientes do CRM
+        const configCorte = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'fin_data_corte'");
+        const dataCorte = configCorte.rows[0]?.valor || '2020-01-01';
+
+        const entradasQuery = await pool.query(`SELECT COALESCE(SUM(l.valor), 0) as total FROM fin_lancamentos l LEFT JOIN fin_categorias c ON l.categoria_id = c.id WHERE l.tipo = 'Receita' AND l.status = 'Pago' AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna') AND l.data_vencimento >= $1`, [dataCorte]);
+        const saidasQuery = await pool.query(`SELECT COALESCE(SUM(l.valor), 0) as total FROM fin_lancamentos l LEFT JOIN fin_categorias c ON l.categoria_id = c.id WHERE l.tipo = 'Despesa' AND l.status = 'Pago' AND (c.dre_ref IS NULL OR c.dre_ref != 'movimentacao_interna') AND l.data_vencimento >= $1`, [dataCorte]);
         
-        const vendasTotalQuery = await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE status NOT ILIKE '%cancelad%' AND status != 'Aguardando Pagamento'`);
+        const vendasTotalQuery = await pool.query(`SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas WHERE status NOT ILIKE '%cancelad%' AND status != 'Aguardando Pagamento' AND (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date >= $1`, [dataCorte]);
 
         const faturamentoTotalPDV = parseFloat(vendasTotalQuery.rows[0].total);
         const saldoGeralSistemico = parseFloat(entradasQuery.rows[0].total) - parseFloat(saidasQuery.rows[0].total) + faturamentoTotalPDV;
@@ -2910,18 +2914,24 @@ app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
 
         const { visao } = req.query; // Permite alternar entre 'previsto' e 'efetuado' no mês atual
 
+        // 📅 Respeita a Data de Corte da Virada de Ano para não puxar sujeira do ano anterior
+        const configCorte = await pool.query("SELECT valor FROM configuracoes WHERE chave = 'fin_data_corte'");
+        const dataCorte = configCorte.rows[0]?.valor || '2020-01-01';
+        const dataFiltroInicial = dataInicioJanela > dataCorte ? dataInicioJanela : dataCorte;
+
         const vendasPassadoQuery = await pool.query(`
             SELECT COALESCE(SUM(valor_total), 0) as total FROM vendas 
             WHERE status NOT ILIKE '%cancelad%' AND status != 'Aguardando Pagamento'
-            AND (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date < $1
-        `, [dataInicioJanela]);
+            AND (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date >= $1
+            AND (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date < $2
+        `, [dataCorte, dataInicioJanela]);
         
         const lancamentosPassadoQuery = await pool.query(`
             SELECT tipo, COALESCE(SUM(valor), 0) as total FROM fin_lancamentos 
-            WHERE data_vencimento < $1 AND status = 'Pago' 
+            WHERE data_vencimento >= $1 AND data_vencimento < $2 AND status = 'Pago' 
             AND categoria_id IN (SELECT id FROM fin_categorias WHERE dre_ref != 'movimentacao_interna')
             GROUP BY tipo
-        `, [dataInicioJanela]);
+        `, [dataCorte, dataInicioJanela]);
 
         let receitasPassado = parseFloat(vendasPassadoQuery.rows[0].total);
         let despesasPassado = 0;
@@ -2930,24 +2940,24 @@ app.get('/api/financeiro/fluxo-caixa', verificarToken, async (req, res) => {
             if (r.tipo === 'Despesa') despesasPassado += parseFloat(r.total);
         });
 
-        // Montante exato da empresa no primeiro dia do nosso Dashboard
+        // Montante exato da empresa no primeiro dia do nosso Dashboard (a partir da data de corte)
         let saldoAcumulado = saldoBancosOrigem + receitasPassado - despesasPassado; 
 
-        // 3. Busca os dados apenas da janela de 12 meses (com Fuso de Brasília)
+        // 3. Busca os dados apenas da janela de 12 meses respeitando a data de corte
         const vendasQuery = await pool.query(`
             SELECT TO_CHAR(data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM') as mes, COALESCE(SUM(valor_total), 0) as total
             FROM vendas 
             WHERE status NOT ILIKE '%cancelad%' AND status != 'Aguardando Pagamento'
             AND (data_hora AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo')::date >= $1 
             GROUP BY mes
-        `, [dataInicioJanela]);
+        `, [dataFiltroInicial]);
 
         const lancamentosQuery = await pool.query(`
             SELECT TO_CHAR(l.data_vencimento, 'YYYY-MM') as mes, c.dre_ref, c.nome, c.tipo, l.status, COALESCE(SUM(l.valor), 0) as total
             FROM fin_lancamentos l JOIN fin_categorias c ON l.categoria_id = c.id
             WHERE c.dre_ref != 'movimentacao_interna' AND l.data_vencimento >= $1
             GROUP BY mes, c.dre_ref, c.nome, c.tipo, l.status
-        `, [dataInicioJanela]);
+        `, [dataFiltroInicial]);
 
         const dataAtual = new Date();
         const mesAtualStr = `${dataAtual.getFullYear()}-${String(dataAtual.getMonth() + 1).padStart(2, '0')}`;
@@ -3185,6 +3195,221 @@ app.get('/api/financeiro/alertas', async (req, res) => {
     } catch (e) {
         console.error("Erro nos alertas:", e);
         res.status(500).json({ erro: "Erro ao gerar alertas" });
+    }
+});
+
+// ==========================================
+// 14. CONCILIAÇÃO BANCÁRIA INTELIGENTE (OFX/CSV) & MEMÓRIA DE REGRAS
+// ==========================================
+async function garantirEstruturaConciliacao() {
+    await pool.query("ALTER TABLE fin_lancamentos ADD COLUMN IF NOT EXISTS hash_extrato VARCHAR(150)");
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS fin_regras_conciliacao (
+            id SERIAL PRIMARY KEY,
+            termo_busca VARCHAR(150) UNIQUE NOT NULL,
+            categoria_id INTEGER,
+            nome_limpo VARCHAR(150)
+        )
+    `);
+}
+
+app.get('/api/financeiro/conciliacao/regras', async (req, res) => {
+    try {
+        await garantirEstruturaConciliacao();
+        const regras = await pool.query("SELECT * FROM fin_regras_conciliacao ORDER BY id DESC");
+        const hashes = await pool.query("SELECT hash_extrato FROM fin_lancamentos WHERE hash_extrato IS NOT NULL");
+        res.json({
+            regras: regras.rows,
+            hashes_existentes: hashes.rows.map(r => r.hash_extrato)
+        });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao buscar memória de conciliação" });
+    }
+});
+
+app.post('/api/financeiro/conciliacao/importar-lote', async (req, res) => {
+    let client;
+    try {
+        await garantirEstruturaConciliacao();
+        const { conta_id, itens } = req.body;
+        if (!conta_id || !Array.isArray(itens) || itens.length === 0) {
+            return res.status(400).json({ erro: "Selecione o banco e ao menos 1 lançamento." });
+        }
+
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        let importados = 0;
+        let ignorados = 0;
+
+        for (let item of itens) {
+            if (item.hash_extrato) {
+                const dup = await client.query("SELECT id FROM fin_lancamentos WHERE hash_extrato = $1 LIMIT 1", [item.hash_extrato]);
+                if (dup.rows.length > 0) {
+                    ignorados++;
+                    continue;
+                }
+            }
+
+            await client.query(`
+                INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, data_pagamento, status, tipo, categoria_id, conta_id, hash_extrato)
+                VALUES ($1, $2, $3, $3, 'Pago', $4, $5, $6, $7)
+            `, [item.descricao, Math.abs(parseFloat(item.valor)), item.data, item.tipo, item.categoria_id, conta_id, item.hash_extrato || null]);
+            importados++;
+
+            if (item.salvar_regra && item.termo_regra && item.categoria_id) {
+                const termoLimpo = item.termo_regra.trim().toUpperCase().substring(0, 140);
+                if (termoLimpo.length >= 3) {
+                    await client.query(`
+                        INSERT INTO fin_regras_conciliacao (termo_busca, categoria_id, nome_limpo)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (termo_busca) DO UPDATE SET categoria_id = EXCLUDED.categoria_id, nome_limpo = EXCLUDED.nome_limpo
+                    `, [termoLimpo, item.categoria_id, item.descricao]);
+                }
+            }
+        }
+
+        await client.query('COMMIT');
+        res.json({ sucesso: true, importados, ignorados });
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error("Erro ao importar extrato:", e);
+        res.status(500).json({ erro: "Erro ao importar lote do extrato" });
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// ==========================================
+// 15. VIRADA DE EXERCÍCIO & RESET FINANCEIRO 100% ICESOFT
+// ==========================================
+app.get('/api/financeiro/backup-lancamentos', async (req, res) => {
+    try {
+        const resLanc = await pool.query(`
+            SELECT l.id, l.data_vencimento, l.descricao, l.tipo, l.valor, l.status, 
+                   COALESCE(c.nome, 'Sem Categoria') as categoria, 
+                   COALESCE(b.nome, 'Sem Banco') as banco
+            FROM fin_lancamentos l
+            LEFT JOIN fin_categorias c ON l.categoria_id = c.id
+            LEFT JOIN fin_contas_bancarias b ON l.conta_id = b.id
+            ORDER BY l.data_vencimento DESC
+        `);
+        res.json(resLanc.rows);
+    } catch (e) {
+        res.status(500).json({ erro: "Erro ao exportar backup" });
+    }
+});
+
+app.post('/api/financeiro/virada-ano', async (req, res) => {
+    let client;
+    try {
+        const { data_corte, bancos_iniciais, recriar_plano_icesoft } = req.body;
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        // 1. Guarda backup interno no banco de dados antes de limpar
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS fin_lancamentos_historico_backup (
+                id_backup SERIAL PRIMARY KEY,
+                data_backup TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                dados_originais JSONB
+            )
+        `);
+        const atuais = await client.query("SELECT * FROM fin_lancamentos");
+        if (atuais.rows.length > 0) {
+            await client.query("INSERT INTO fin_lancamentos_historico_backup (dados_originais) VALUES ($1)", [JSON.stringify(atuais.rows)]);
+        }
+
+        // 2. Zera todos os lançamentos financeiros antigos
+        await client.query("DELETE FROM fin_lancamentos");
+
+        // 3. Instala o Plano de Contas 100% Sorveteria & Açaí (Icesoft)
+        if (recriar_plano_icesoft) {
+            await client.query("DELETE FROM fin_categorias");
+            await client.query("ALTER TABLE fin_categorias ADD COLUMN IF NOT EXISTS ordem INTEGER DEFAULT 0");
+            await client.query("ALTER TABLE fin_categorias ADD COLUMN IF NOT EXISTS ativa BOOLEAN DEFAULT true");
+
+            const planoIcesoft = [
+                // 1. Receitas Operacionais
+                ['Vendas Loja Física (Balcão/Mesa)', 'Receita', 'receita_bruta', 1],
+                ['Vendas Delivery Próprio (ConvertMenu)', 'Receita', 'receita_bruta', 2],
+                ['Vendas iFood / Apps Terceiros', 'Receita', 'receita_bruta', 3],
+                // 2. Deduções e Taxas
+                ['Taxas Maquininha (SumUp / Mercado Pago)', 'Despesa', 'deducoes', 4],
+                ['Taxas e Comissões iFood Pago', 'Despesa', 'deducoes', 5],
+                ['Impostos (DAS / MEI / Simples)', 'Despesa', 'deducoes', 6],
+                ['Cupons e Premiações Fidelidade', 'Despesa', 'deducoes', 7],
+                // 3. CMV (Custo de Mercadoria - Sorveteria & Açaí)
+                ['Caixas de Açaí, Sorvetes e Picolés (Bases)', 'Despesa', 'cmv', 8],
+                ['Cremes e Caldas (Nutella, Avelã, Leitinho)', 'Despesa', 'cmv', 9],
+                ['Lácteos (Leite em Pó, Leite Condensado, Creme de Leite)', 'Despesa', 'cmv', 10],
+                ['Frutas Frescas (Morango, Banana, Uva, Kiwi)', 'Despesa', 'cmv', 11],
+                ['Toppings Secos (Paçoca, Bis, Granola, Confete, Óreo)', 'Despesa', 'cmv', 12],
+                ['Embalagens e Descartáveis (Copos, Potes, Tampas, Colheres)', 'Despesa', 'cmv', 13],
+                ['Bebidas e Itens de Revenda (Água, Refrigerantes)', 'Despesa', 'cmv', 14],
+                // 4. Despesas Operacionais Fixas (Loja)
+                ['Energia Elétrica (Freezers e Loja)', 'Despesa', 'despesas_operacionais', 15],
+                ['Aluguel, Condomínio e IPTU', 'Despesa', 'despesas_operacionais', 16],
+                ['Água e Saneamento', 'Despesa', 'despesas_operacionais', 17],
+                ['Internet, Sistemas e Servidores', 'Despesa', 'despesas_operacionais', 18],
+                ['Folha, Diárias de Atendentes e Encargos', 'Despesa', 'despesas_operacionais', 19],
+                ['Manutenção de Freezers, Ar e Equipamentos', 'Despesa', 'despesas_operacionais', 20],
+                ['Material de Limpeza e Higiene', 'Despesa', 'despesas_operacionais', 21],
+                ['Contador e Taxas de Alvará', 'Despesa', 'despesas_operacionais', 22],
+                // 5. Despesas Comerciais e Logística
+                ['Diárias e Taxas de Motoboy / Entregas', 'Despesa', 'despesas_vendas', 23],
+                ['Combustível e Manutenção da Moto', 'Despesa', 'despesas_vendas', 24],
+                ['Anúncios e Tráfego Pago (Instagram / Meta Ads)', 'Despesa', 'despesas_vendas', 25],
+                ['Panfletos, Adesivos e Comunicação Visual', 'Despesa', 'despesas_vendas', 26],
+                // 6. Despesas Financeiras
+                ['Tarifas e Mensalidades Bancárias (Sicredi / Outros)', 'Despesa', 'despesas_financeiras', 27],
+                ['Juros, Multas ou Parcelas de Empréstimo', 'Despesa', 'despesas_financeiras', 28],
+                // 7. Investimentos (CAPEX)
+                ['Compra de Freezers, Móveis e Equipamentos', 'Despesa', 'investimentos', 29],
+                ['Reformas e Melhorias na Loja', 'Despesa', 'investimentos', 30],
+                // 8 a 11. Sócios e Não Operacional
+                ['Rendimentos dos Cofrinhos (Banco Icesoft / Reserva)', 'Receita', 'outras_receitas', 31],
+                ['Despesas Eventuais / Perdas Avulsas', 'Despesa', 'nao_operacional', 32],
+                ['Aporte dos Sócios / Injeção de Capital', 'Receita', 'aporte_capital', 33],
+                ['Pró-Labore / Retirada dos Sócios (Wallace & Jaque)', 'Despesa', 'distribuicao_lucros', 34],
+                // 12. Movimentação Interna
+                ['Transferência / Fechamento / Repasse Maquininha', 'Receita', 'movimentacao_interna', 35]
+            ];
+
+            for (let cat of planoIcesoft) {
+                await client.query(
+                    "INSERT INTO fin_categorias (nome, tipo, dre_ref, ordem, ativa) VALUES ($1, $2, $3, $4, true)",
+                    cat
+                );
+            }
+        }
+
+        // 4. Recria os Bancos e Cofrinhos Oficiais da Icesoft com os saldos do novo ciclo
+        if (Array.isArray(bancos_iniciais) && bancos_iniciais.length > 0) {
+            await client.query("DELETE FROM fin_contas_bancarias");
+            for (let b of bancos_iniciais) {
+                await client.query(
+                    "INSERT INTO fin_contas_bancarias (nome, saldo_inicial) VALUES ($1, $2)",
+                    [b.nome, parseFloat(b.saldo_inicial) || 0]
+                );
+            }
+        }
+
+        // 5. Salva a Data de Corte Oficial para blindar o Fluxo de Caixa e Resumo
+        const corteFinal = data_corte || '2027-01-01';
+        await client.query(`
+            INSERT INTO configuracoes (chave, valor) VALUES ('fin_data_corte', $1)
+            ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor
+        `, [corteFinal]);
+
+        await client.query('COMMIT');
+        res.json({ sucesso: true, data_corte: corteFinal });
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error("Erro na Virada de Ano:", e);
+        res.status(500).json({ erro: "Erro ao executar a Virada de Ano" });
+    } finally {
+        if (client) client.release();
     }
 });
 
