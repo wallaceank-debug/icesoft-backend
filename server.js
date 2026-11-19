@@ -3248,6 +3248,17 @@ app.get('/api/financeiro/conciliacao/regras', async (req, res) => {
     }
 });
 
+// 🧹 Rota cirúrgica: Limpa lançamentos APENAS de um banco específico (para reimportar extrato sem afetar os outros bancos)
+app.delete('/api/financeiro/bancos/:id/lancamentos', async (req, res) => {
+    try {
+        const result = await pool.query('DELETE FROM fin_lancamentos WHERE conta_id = $1', [req.params.id]);
+        res.json({ sucesso: true, removidos: result.rowCount });
+    } catch (e) {
+        console.error("Erro ao limpar lançamentos do banco:", e);
+        res.status(500).json({ erro: "Erro ao limpar lançamentos do banco" });
+    }
+});
+
 app.post('/api/financeiro/conciliacao/importar-lote', async (req, res) => {
     let client;
     try {
@@ -3262,10 +3273,23 @@ app.post('/api/financeiro/conciliacao/importar-lote', async (req, res) => {
 
         let importados = 0;
         let ignorados = 0;
+        const contadorHashLote = {};
 
         for (let item of itens) {
-            if (item.hash_extrato) {
-                const dup = await client.query("SELECT id FROM fin_lancamentos WHERE hash_extrato = $1 LIMIT 1", [item.hash_extrato]);
+            let hashFinal = item.hash_extrato || null;
+
+            // Se o banco (como o Sicredi) repetir o mesmo código/valor no mesmo arquivo, numera a ocorrência (#1, #2...) para não perder entradas reais
+            if (hashFinal) {
+                contadorHashLote[hashFinal] = (contadorHashLote[hashFinal] || 0) + 1;
+                if (contadorHashLote[hashFinal] > 1) {
+                    hashFinal = `${hashFinal}#${contadorHashLote[hashFinal]}`;
+                }
+
+                // Verifica duplicidade APENAS dentro da mesma conta bancária
+                const dup = await client.query(
+                    "SELECT id FROM fin_lancamentos WHERE hash_extrato = $1 AND conta_id = $2 LIMIT 1",
+                    [hashFinal, conta_id]
+                );
                 if (dup.rows.length > 0) {
                     ignorados++;
                     continue;
@@ -3275,7 +3299,7 @@ app.post('/api/financeiro/conciliacao/importar-lote', async (req, res) => {
             await client.query(`
                 INSERT INTO fin_lancamentos (descricao, valor, data_vencimento, data_pagamento, status, tipo, categoria_id, conta_id, hash_extrato)
                 VALUES ($1, $2, $3, $3, 'Pago', $4, $5, $6, $7)
-            `, [item.descricao, Math.abs(parseFloat(item.valor)), item.data, item.tipo, item.categoria_id, conta_id, item.hash_extrato || null]);
+            `, [item.descricao, Math.abs(parseFloat(item.valor)), item.data, item.tipo, item.categoria_id, conta_id, hashFinal]);
             importados++;
 
             if (item.salvar_regra && item.termo_regra && item.categoria_id) {
