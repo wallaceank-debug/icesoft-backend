@@ -604,6 +604,17 @@ app.post('/api/vendas', async (req, res) => {
             [produto_nome, valorFinal, forma_pagamento, JSON.stringify(itensParsed), status || 'Concluída', cliente_nome, cliente_telefone, cliente_endereco, origemFinal, observacoes || '', transacao_id || null, numeroDiario, taxaCalculada, desconto || 0, cupom_usado || null, custoRealTotal, pagamentos_detalhes ? JSON.stringify(pagamentos_detalhes) : null]
         );
 
+        // 🛒 RECUPERAÇÃO DE CARRINHO: Se o pedido foi concluído (não é Pix pendente), marca o carrinho como convertido
+        if (cliente_telefone && status !== 'Aguardando Pagamento') {
+            const telLimpoVenda = String(cliente_telefone).replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+            if (telLimpoVenda) {
+                await pool.query(
+                    "UPDATE carrinhos_abandonados SET status = 'convertido', atualizado_em = CURRENT_TIMESTAMP WHERE telefone = $1 AND status = 'ativo'",
+                    [telLimpoVenda]
+                ).catch(() => null);
+            }
+        }
+
         // 🥣 BAIXA DO ESTOQUE DE MATÉRIAS-PRIMAS DA FICHA TÉCNICA
         try {
             for (let id_insumo in mapBaixaInsumos) {
@@ -1917,13 +1928,33 @@ app.get('/api/crm/clientes', verificarToken, async (req, res) => {
 pool.query(`
     CREATE TABLE IF NOT EXISTS integracoes_config (
         id SERIAL PRIMARY KEY, zap_url TEXT, zap_key TEXT, zap_instancia TEXT,
-        msg_boas_vindas TEXT, msg_recebido TEXT, msg_aceito TEXT, msg_entrega TEXT, msg_concluido TEXT, msg_balcao TEXT, msg_retirada TEXT
+        msg_boas_vindas TEXT, msg_recebido TEXT, msg_aceito TEXT, msg_entrega TEXT, msg_concluido TEXT, msg_balcao TEXT, msg_retirada TEXT,
+        rec_carrinho_ativo BOOLEAN DEFAULT false, rec_carrinho_cupom TEXT DEFAULT '', msg_carrinho_abandonado TEXT
     );
 `).then(async () => {
     await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS msg_recebido TEXT');
     await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS msg_balcao TEXT');
-    // 👇 MUDANÇA AQUI: Garante que a nova coluna exista mesmo em bancos antigos (Auto-cura)
-    await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS msg_retirada TEXT'); 
+    await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS msg_retirada TEXT');
+    // 🛒 NOVO: Campos de controle da Recuperação de Carrinho Abandonado
+    await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS rec_carrinho_ativo BOOLEAN DEFAULT false');
+    await pool.query("ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS rec_carrinho_cupom TEXT DEFAULT ''");
+    await pool.query('ALTER TABLE integracoes_config ADD COLUMN IF NOT EXISTS msg_carrinho_abandonado TEXT');
+
+    // 🛒 NOVA TABELA: Só registra carrinhos montados a partir desta atualização
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS carrinhos_abandonados (
+            id SERIAL PRIMARY KEY,
+            telefone VARCHAR(20) NOT NULL,
+            cliente_nome VARCHAR(100),
+            itens JSONB DEFAULT '[]',
+            valor_total DECIMAL(10,2) DEFAULT 0,
+            status VARCHAR(30) DEFAULT 'ativo',
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            enviado_em TIMESTAMP DEFAULT NULL
+        );
+    `);
+
     if ((await pool.query('SELECT * FROM integracoes_config')).rowCount === 0) await pool.query('INSERT INTO integracoes_config (zap_instancia) VALUES ($1)', ['IcesoftBot']);
 }).catch(console.error);
 
@@ -2081,6 +2112,17 @@ async function aprovarPedidoPixNoSistema(transacaoId, origemConfirmacao) {
     if (resultado.rows.length > 0) {
         const pedido = resultado.rows[0];
         console.log(`✅ Pagamento Pix ${transacaoId} APROVADO (${origemConfirmacao})! Disparando Pedido #${pedido.numero_diario || pedido.id} no Kanban.`);
+
+        // 🛒 Marca o carrinho como convertido assim que o Pix é confirmado
+        if (pedido.cliente_telefone) {
+            const telLimpoPix = String(pedido.cliente_telefone).replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+            if (telLimpoPix) {
+                await pool.query(
+                    "UPDATE carrinhos_abandonados SET status = 'convertido', atualizado_em = CURRENT_TIMESTAMP WHERE telefone = $1 AND status = 'ativo'",
+                    [telLimpoPix]
+                ).catch(() => null);
+            }
+        }
         
         // 1. Toca a campainha e joga na tela do Kanban
         io.emit('novo_pedido_kanban', { 
@@ -3624,6 +3666,226 @@ setInterval(async () => {
         console.error("Erro no Faxineiro de Pix:", e);
     }
 }, 60 * 1000); // Executa esse bloco a cada 60 segundos exatos
+
+// ==========================================
+// 🛒 MOTOR DE RECUPERAÇÃO DE CARRINHO ABANDONADO (15 MIN + TRAVA 15 DIAS)
+// ==========================================
+app.post('/api/carrinhos/sincronizar', async (req, res) => {
+    try {
+        const { telefone, cliente_nome, itens, valor_total } = req.body;
+        const telLimpo = String(telefone || '').replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, '');
+
+        // 🛡️ Só aceita números brasileiros válidos (10 ou 11 dígitos) e rejeita números falsos repetidos
+        if (!telLimpo || telLimpo.length < 10 || telLimpo.length > 11 || /^(\d)\1+$/.test(telLimpo)) {
+            return res.json({ sucesso: false, motivo: 'Telefone inválido ou incompleto' });
+        }
+
+        const listaItens = Array.isArray(itens) ? itens : [];
+
+        // Se o cliente esvaziou a sacola, cancela o rastreio silenciosamente
+        if (listaItens.length === 0) {
+            await pool.query(
+                "UPDATE carrinhos_abandonados SET status = 'cancelado', atualizado_em = CURRENT_TIMESTAMP WHERE telefone = $1 AND status = 'ativo'",
+                [telLimpo]
+            );
+            return res.json({ sucesso: true });
+        }
+
+        // Verifica se já existe um carrinho ativo para esse cliente
+        const existente = await pool.query(
+            "SELECT id FROM carrinhos_abandonados WHERE telefone = $1 AND status = 'ativo' ORDER BY id DESC LIMIT 1",
+            [telLimpo]
+        );
+
+        if (existente.rows.length > 0) {
+            await pool.query(
+                `UPDATE carrinhos_abandonados 
+                 SET cliente_nome = COALESCE(NULLIF($1, ''), cliente_nome),
+                     itens = $2,
+                     valor_total = $3,
+                     atualizado_em = CURRENT_TIMESTAMP
+                 WHERE id = $4`,
+                [cliente_nome || '', JSON.stringify(listaItens), Number(valor_total) || 0, existente.rows[0].id]
+            );
+        } else {
+            await pool.query(
+                `INSERT INTO carrinhos_abandonados (telefone, cliente_nome, itens, valor_total, status)
+                 VALUES ($1, $2, $3, $4, 'ativo')`,
+                [telLimpo, cliente_nome || '', JSON.stringify(listaItens), Number(valor_total) || 0]
+            );
+        }
+
+        res.json({ sucesso: true });
+    } catch (e) {
+        console.error("Erro ao sincronizar carrinho:", e);
+        res.status(500).json({ erro: "Erro ao sincronizar carrinho" });
+    }
+});
+
+// Função auxiliar: checa se a Icesoft está aberta agora no horário de Brasília
+async function lojaEstaAbertaParaRecuperacao() {
+    try {
+        const resConf = await pool.query("SELECT chave, valor FROM configuracoes WHERE chave IN ('status_delivery', 'horarios_funcionamento_auto')");
+        const conf = {};
+        resConf.rows.forEach(r => conf[r.chave] = r.valor);
+
+        if (String(conf.status_delivery || '').toLowerCase().trim() === 'fechado') return false;
+        if (!conf.horarios_funcionamento_auto) return true;
+
+        const horarios = JSON.parse(conf.horarios_funcionamento_auto);
+        const agoraSP = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+        const configHoje = horarios[agoraSP.getDay()];
+
+        if (!configHoje || !configHoje.ativo || !configHoje.abre || !configHoje.fecha) return false;
+
+        const horaAtualMin = agoraSP.getHours() * 60 + agoraSP.getMinutes();
+        const [hAbre, mAbre] = configHoje.abre.split(':').map(Number);
+        const [hFecha, mFecha] = configHoje.fecha.split(':').map(Number);
+        const minAbre = hAbre * 60 + mAbre;
+        const minFecha = hFecha * 60 + mFecha;
+
+        if (minFecha < minAbre) {
+            return (horaAtualMin >= minAbre || horaAtualMin <= minFecha);
+        }
+        return (horaAtualMin >= minAbre && horaAtualMin <= minFecha);
+    } catch (e) {
+        return false;
+    }
+}
+
+let processandoRecuperacao = false; // 🔒 Impede que duas rodadas do robô rodem ao mesmo tempo
+
+setInterval(async () => {
+    if (processandoRecuperacao) return;
+    processandoRecuperacao = true;
+
+    try {
+        const config = (await pool.query('SELECT * FROM integracoes_config LIMIT 1')).rows[0];
+
+        // Só roda se a chavinha estiver ligada, o WhatsApp configurado e o texto preenchido
+        if (!config || !config.rec_carrinho_ativo || !config.zap_url || !config.zap_key || !config.zap_instancia) return;
+        if (!config.msg_carrinho_abandonado || config.msg_carrinho_abandonado.trim() === '') return;
+
+        // Limpa carrinhos muito antigos (mais de 4 horas) para nunca mandar mensagem fora de hora
+        await pool.query("UPDATE carrinhos_abandonados SET status = 'cancelado' WHERE status = 'ativo' AND atualizado_em < NOW() - INTERVAL '4 hours'");
+
+        // Verifica se a loja está aberta antes de incomodar qualquer cliente
+        const abertaAgora = await lojaEstaAbertaParaRecuperacao();
+        if (!abertaAgora) {
+            await pool.query("UPDATE carrinhos_abandonados SET status = 'cancelado' WHERE status = 'ativo' AND atualizado_em <= NOW() - INTERVAL '15 minutes'");
+            return;
+        }
+
+        // Busca no máximo 5 carrinhos por minuto para manter ritmo humano no WhatsApp
+        const abandonados = await pool.query(`
+            SELECT * FROM carrinhos_abandonados
+            WHERE status = 'ativo'
+              AND atualizado_em <= NOW() - INTERVAL '15 minutes'
+              AND atualizado_em >= NOW() - INTERVAL '4 hours'
+            ORDER BY atualizado_em ASC
+            LIMIT 5
+        `);
+
+        for (let cart of abandonados.rows) {
+            // 1. Dupla checagem 100% dentro do banco (sem risco de fuso horário): comprou depois de montar o carrinho?
+            const comprouDepois = await pool.query(`
+                SELECT id FROM vendas
+                WHERE regexp_replace(regexp_replace(COALESCE(cliente_telefone, ''), '\\D', '', 'g'), '^55(?=\\d{10,11}$)', '') = $1
+                  AND data_hora >= (SELECT criado_em FROM carrinhos_abandonados WHERE id = $2)
+                  AND status NOT ILIKE '%cancelad%'
+                  AND status != 'Aguardando Pagamento'
+                LIMIT 1
+            `, [cart.telefone, cart.id]);
+
+            if (comprouDepois.rows.length > 0) {
+                await pool.query("UPDATE carrinhos_abandonados SET status = 'convertido' WHERE id = $1", [cart.id]);
+                continue;
+            }
+
+            // 2. Trava Anti-Abuso: bloqueia se já recebeu recuperação nos últimos 15 dias
+            const recebeuRecente = await pool.query(`
+                SELECT id FROM carrinhos_abandonados
+                WHERE telefone = $1
+                  AND status = 'enviado'
+                  AND enviado_em >= NOW() - INTERVAL '15 days'
+                LIMIT 1
+            `, [cart.telefone]);
+
+            if (recebeuRecente.rows.length > 0) {
+                await pool.query("UPDATE carrinhos_abandonados SET status = 'cancelado' WHERE id = $1", [cart.id]);
+                console.log(`🛡️ Recuperação bloqueada (trava 15 dias): ${cart.telefone}`);
+                continue;
+            }
+
+            // 3. Descobre o nome real do cliente (se não veio no carrinho, busca no histórico)
+            let nomeCliente = cart.cliente_nome ? cart.cliente_nome.trim() : '';
+            if (!nomeCliente) {
+                const buscaNome = await pool.query(`
+                    SELECT cliente_nome FROM vendas
+                    WHERE regexp_replace(regexp_replace(COALESCE(cliente_telefone, ''), '\\D', '', 'g'), '^55(?=\\d{10,11}$)', '') = $1
+                      AND cliente_nome IS NOT NULL AND TRIM(cliente_nome) != ''
+                    ORDER BY id DESC LIMIT 1
+                `, [cart.telefone]);
+                if (buscaNome.rows.length > 0) nomeCliente = buscaNome.rows[0].cliente_nome;
+            }
+            const primeiroNome = nomeCliente ? nomeCliente.split(' ')[0] : 'Cliente';
+
+            // 4. Monta a lista de itens e o valor total
+            let itensArray = [];
+            try { itensArray = typeof cart.itens === 'string' ? JSON.parse(cart.itens) : (cart.itens || []); } catch (e) {}
+            const resumoItens = itensArray.map(i => `▪️ 1x ${String(i.nome || '').replace(/^Delivery:\s*/i, '')}`).join('\n');
+            const totalFormatado = `R$ ${Number(cart.valor_total || 0).toFixed(2).replace('.', ',')}`;
+            const cupomCodigo = (config.rec_carrinho_cupom || '').trim().toUpperCase();
+
+            // 5. Substitui as variáveis mágicas no texto configurado no painel
+            const textoFinal = config.msg_carrinho_abandonado
+                .replace(/{nome}/g, primeiroNome)
+                .replace(/{itens}/g, resumoItens)
+                .replace(/{total}/g, totalFormatado)
+                .replace(/{cupom}/g, cupomCodigo);
+
+            // 6. Trava o registro como enviado antes do disparo para evitar mensagens duplicadas
+            const travado = await pool.query(
+                "UPDATE carrinhos_abandonados SET status = 'enviado', enviado_em = CURRENT_TIMESTAMP WHERE id = $1 AND status = 'ativo' RETURNING id",
+                [cart.id]
+            );
+            if (travado.rows.length === 0) continue;
+
+            // 7. Dispara um por vez com pausa de 6 segundos entre clientes (proteção anti-banimento)
+            const telefoneZap = "55" + cart.telefone;
+            const urlZap = config.zap_url.trim().replace(/\/$/, "");
+            const instanciaURL = encodeURIComponent(config.zap_instancia.trim());
+
+            try {
+                const r = await fetch(`${urlZap}/message/sendText/${instanciaURL}`, {
+                    method: 'POST',
+                    headers: { 'apikey': config.zap_key.trim(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ number: telefoneZap, text: textoFinal })
+                });
+
+                if (r.ok) {
+                    console.log(`🛒✅ Mensagem de recuperação enviada para ${primeiroNome} (${cart.telefone})!`);
+                    const nomeCampanha = cupomCodigo ? `Recuperação Carrinho (${cupomCodigo})` : 'Recuperação Carrinho';
+                    await pool.query(
+                        "INSERT INTO marketing_envios (telefone, cliente_nome, campanha) VALUES ($1, $2, $3)",
+                        [cart.telefone, nomeCliente || primeiroNome, nomeCampanha]
+                    ).catch(() => null);
+                } else {
+                    console.log(`⚠️ Falha ao enviar recuperação para ${cart.telefone}`);
+                }
+            } catch (err) {
+                console.log("⚠️ Erro de rede na recuperação de carrinho:", err.message);
+            }
+
+            // ⏱️ Pausa humana de 6 segundos antes do próximo cliente
+            await new Promise(resolve => setTimeout(resolve, 6000));
+        }
+    } catch (e) {
+        console.error("Erro no robô de recuperação de carrinho:", e);
+    } finally {
+        processandoRecuperacao = false;
+    }
+}, 60 * 1000);
 
 const PORTA = process.env.PORT || 3000;
 server.listen(PORTA, () => console.log(`🚀 Servidor Icesoft v5.0 (com WebSockets) na porta ${PORTA}!`));
