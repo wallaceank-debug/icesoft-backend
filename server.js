@@ -1778,33 +1778,111 @@ app.post('/api/grupos', async (req, res) => { try { res.json({ sucesso: true, gr
 app.put('/api/grupos/:id', async (req, res) => { try { res.json({ sucesso: true, grupo: (await pool.query('UPDATE grupos_adicionais SET nome = $1, limite = $2, itens = $3, obrigatorio = $4 WHERE id = $5 RETURNING *', [req.body.nome, req.body.limite, req.body.itens ? JSON.stringify(req.body.itens) : '[]', req.body.obrigatorio || false, req.params.id])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.delete('/api/grupos/:id', async (req, res) => { try { await pool.query('DELETE FROM grupos_adicionais WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
 app.put('/api/grupos/:id/status', async (req, res) => { try { await pool.query('UPDATE grupos_adicionais SET ativo = $1 WHERE id = $2', [req.body.ativo, req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
-app.get('/api/categorias', async (req, res) => { try { res.json((await pool.query('SELECT * FROM categorias ORDER BY ordem ASC, id ASC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
-app.post('/api/categorias', async (req, res) => { try { res.json({ sucesso: true, categoria: (await pool.query('INSERT INTO categorias (nome, ordem, mostrar_cardapio) VALUES ($1, $2, $3) RETURNING *', [req.body.nome, req.body.ordem || 0, req.body.mostrar_cardapio !== false])).rows[0] }); } catch (e) { res.status(500).json({erro:"Erro"}); } });
-app.delete('/api/categorias/:id', async (req, res) => { try { await pool.query('DELETE FROM categorias WHERE id = $1', [req.params.id]); res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro:"Erro"}); }});
-app.put('/api/categorias/ordem', async (req, res) => { try { for (let cat of req.body) { await pool.query('UPDATE categorias SET ordem = $1 WHERE id = $2', [cat.ordem, cat.id]); } res.json({ sucesso: true }); } catch (e) { res.status(500).json({erro: "Erro"}); } });
+app.get('/api/categorias', async (req, res) => {
+    try {
+        res.json((await pool.query('SELECT * FROM categorias ORDER BY COALESCE(ordem, 9999) ASC, id ASC')).rows);
+    } catch (e) {
+        res.status(500).json({ erro: "Erro" });
+    }
+});
 
-app.put('/api/categorias/:id', async (req, res) => { 
-    try { 
+app.post('/api/categorias', async (req, res) => {
+    try {
+        const { nome, ordem, mostrar_cardapio, dias_semana, hora_inicio, hora_fim } = req.body;
+        const nomeLimpo = String(nome || '').trim();
+        const result = await pool.query(
+            'INSERT INTO categorias (nome, ordem, mostrar_cardapio, dias_semana, hora_inicio, hora_fim) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+            [nomeLimpo, ordem || 0, mostrar_cardapio !== false, dias_semana || '', hora_inicio || '', hora_fim || '']
+        );
+        res.json({ sucesso: true, categoria: result.rows[0] });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro" });
+    }
+});
+
+app.delete('/api/categorias/:id', async (req, res) => {
+    try {
+        await pool.query('DELETE FROM categorias WHERE id = $1', [req.params.id]);
+        res.json({ sucesso: true });
+    } catch (e) {
+        res.status(500).json({ erro: "Erro" });
+    }
+});
+
+app.put('/api/categorias/ordem', async (req, res) => {
+    let client;
+    try {
+        if (!Array.isArray(req.body) || req.body.length === 0) {
+            return res.status(400).json({ erro: "Lista de ordem inválida." });
+        }
+        client = await pool.connect();
+        await client.query('BEGIN');
+        for (let cat of req.body) {
+            await client.query('UPDATE categorias SET ordem = $1 WHERE id = $2', [Number(cat.ordem), Number(cat.id)]);
+        }
+        await client.query('COMMIT');
+        res.json({ sucesso: true });
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error("Erro ao reordenar categorias:", e);
+        res.status(500).json({ erro: "Erro ao salvar ordem das categorias" });
+    } finally {
+        if (client) client.release();
+    }
+});
+
+app.put('/api/categorias/:id', async (req, res) => {
+    try {
         const { nome, mostrar_cardapio, dias_semana, hora_inicio, hora_fim } = req.body;
-        
-        // Se a requisição enviar um 'nome', significa que veio do Modal Avançado. 
+
+        // Se a requisição enviar um 'nome', significa que veio do Modal Avançado.
         if (nome !== undefined) {
+            const nomeLimpo = String(nome).trim();
+            const catAtual = await pool.query('SELECT nome FROM categorias WHERE id = $1', [req.params.id]);
+            const nomeAntigo = catAtual.rows[0]?.nome;
+
             await pool.query(
-                'UPDATE categorias SET nome = $1, mostrar_cardapio = $2, dias_semana = $3, hora_inicio = $4, hora_fim = $5 WHERE id = $6', 
-                [nome, mostrar_cardapio !== false, dias_semana || '', hora_inicio || '', hora_fim || '', req.params.id]
+                'UPDATE categorias SET nome = $1, mostrar_cardapio = $2, dias_semana = $3, hora_inicio = $4, hora_fim = $5 WHERE id = $6',
+                [nomeLimpo, mostrar_cardapio !== false, dias_semana || '', hora_inicio || '', hora_fim || '', req.params.id]
             );
+
+            // 🔄 Sincroniza automaticamente o novo nome nos produtos (principal e categorias adicionais)
+            if (nomeAntigo && nomeAntigo !== nomeLimpo) {
+                await pool.query(
+                    'UPDATE produtos SET categoria = $1 WHERE TRIM(categoria) = TRIM($2)',
+                    [nomeLimpo, nomeAntigo]
+                );
+
+                const prodsExtras = await pool.query("SELECT id, categorias_adicionais FROM produtos WHERE categorias_adicionais IS NOT NULL");
+                for (let prod of prodsExtras.rows) {
+                    let extras = [];
+                    try {
+                        extras = typeof prod.categorias_adicionais === 'string'
+                            ? JSON.parse(prod.categorias_adicionais)
+                            : (prod.categorias_adicionais || []);
+                    } catch (e) {}
+
+                    if (Array.isArray(extras) && extras.some(c => String(c).trim() === String(nomeAntigo).trim())) {
+                        const novosExtras = extras.map(c => String(c).trim() === String(nomeAntigo).trim() ? nomeLimpo : c);
+                        await pool.query(
+                            'UPDATE produtos SET categorias_adicionais = $1 WHERE id = $2',
+                            [JSON.stringify(novosExtras), prod.id]
+                        );
+                    }
+                }
+            }
         } else {
             // Se não enviou 'nome', é só o clique rápido da chavinha de visibilidade.
             await pool.query(
-                'UPDATE categorias SET mostrar_cardapio = $1 WHERE id = $2', 
+                'UPDATE categorias SET mostrar_cardapio = $1 WHERE id = $2',
                 [req.body.mostrar_cardapio !== false, req.params.id]
             );
         }
-        res.json({ sucesso: true }); 
-    } catch (e) { 
+        res.json({ sucesso: true });
+    } catch (e) {
         console.error("Erro ao atualizar categoria:", e);
-        res.status(500).json({erro:"Erro ao atualizar"}); 
-    } 
+        res.status(500).json({ erro: "Erro ao atualizar" });
+    }
 });
 
 app.get('/api/cidades', async (req, res) => { try { res.json((await pool.query('SELECT * FROM cidades ORDER BY nome ASC')).rows); } catch (e) { res.status(500).json({erro:"Erro"}); }});
